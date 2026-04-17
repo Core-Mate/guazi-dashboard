@@ -133,7 +133,6 @@
   #dashTab-overview.active { display: flex; flex-direction: column; gap: 10px; flex: 0 0 auto; min-height: auto; overflow: visible; }
   #dashTab-overview > #highlightGrid,
   #dashTab-overview > #highlightDetail,
-  #dashTab-overview > #execStatMini,
   #dashTab-overview > #achievementBar,
   #dashTab-overview > #roiHero,
   #dashTab-overview > #roiPlatformCard { flex: 0 0 auto; }
@@ -159,11 +158,6 @@
   .chart-toggle:not(.active) .toggle-dot::after { content:none; }
   .beta-toggle { opacity: 0.45; pointer-events: none; cursor: default; text-decoration: none !important; }
   .beta-sup { font-size: 9px; color: #a1a1aa; margin-left: 2px; vertical-align: super; }
-
-  /* ══ Mini stat row (demoted exec/runtime/cost) ══ */
-  .stat-mini-row { display:flex; align-items:center; gap:16px; padding:2px 4px; font-size:13px; color:#71717a; margin-bottom:0; }
-  .stat-mini-row strong { color:#09090b; font-weight:600; }
-  .stat-mini-sep { color:#d4d4d8; }
 
   /* ══ No-data placeholder ══ */
   .text-na { color:#a1a1aa; font-style:italic; }
@@ -370,6 +364,7 @@
     min-width: 0;
     background: var(--color-card);
     border: none;
+    border-top: 3px solid var(--accent-default);
     border-radius: var(--radius-card);
     box-shadow: var(--shadow-card-sm);
     padding: clamp(12px, 0.55vw + 8px, 20px) clamp(12px, 0.35vw + 8px, 18px) clamp(10px, 0.45vw + 6px, 18px);
@@ -380,28 +375,14 @@
     min-height: clamp(96px, 1.2vw + 68px, 132px);
     transition: transform 0.2s ease, box-shadow 0.2s ease;
   }
-  .highlight-card::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 4px;
-    background: var(--accent-default);
-    border-top-left-radius: var(--radius-card);
-    border-top-right-radius: var(--radius-card);
-    border-bottom-left-radius: 0;
-    border-bottom-right-radius: 0;
-    opacity: 1;
-  }
-  .highlight-card[data-key="complete"]::before,
-  .highlight-card[data-key="success"]::before { background: var(--accent-success); }
-  .highlight-card[data-key="favorite"]::before,
-  .highlight-card[data-key="fav"]::before     { background: var(--accent-warning); }
-  .highlight-card[data-key="comment"]::before  { background: var(--accent-purple); }
-  .highlight-card[data-key="follow"]::before   { background: var(--accent-pink); }
-  .highlight-card[data-key="runtime"]::before,
-  .highlight-card[data-key="time"]::before     { background: var(--accent-cyan); }
+  .highlight-card[data-key="complete"],
+  .highlight-card[data-key="success"] { border-top-color: var(--accent-success); }
+  .highlight-card[data-key="favorite"],
+  .highlight-card[data-key="fav"]     { border-top-color: var(--accent-warning); }
+  .highlight-card[data-key="comment"] { border-top-color: var(--accent-purple); }
+  .highlight-card[data-key="follow"]  { border-top-color: var(--accent-pink); }
+  .highlight-card[data-key="runtime"],
+  .highlight-card[data-key="time"]    { border-top-color: var(--accent-cyan); }
   .highlight-card:hover {
     transform: translateY(-2px);
     box-shadow: var(--shadow-card-md);
@@ -1093,6 +1074,12 @@
     text-overflow: ellipsis;
     color: #52525b;
   }
+  .td-skill-name[data-truncated="true"]::after {
+    content: "...";
+    margin-left: 4px;
+    color: var(--color-text-3);
+    font-weight: 700;
+  }
   .td-skill-chevron {
     display: inline-block;
     margin-left: 4px;
@@ -1104,6 +1091,28 @@
   }
   .td-skill.is-truncated .td-skill-chevron { opacity: 1; }
   .td-skill.is-truncated:hover .td-skill-chevron { color: #6366f1; }
+  .skill-name-tip {
+    position: fixed;
+    background: #0f172a;
+    color: #fff;
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 8px 12px;
+    border-radius: 6px;
+    max-width: 360px;
+    z-index: 1000;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(-2px);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+    white-space: normal;
+    word-break: break-word;
+  }
+  .skill-name-tip.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
 
 /* —— 组件微动画 —— */
 @keyframes dashFadeIn {

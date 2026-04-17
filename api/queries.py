@@ -129,10 +129,13 @@ def _resolve_window(
             raise ValueError("custom range requires start and end")
         cur_start = datetime.fromisoformat(start)
         cur_end = datetime.fromisoformat(end)
+        end_is_date_only = "T" not in end and ":" not in end
         if cur_start.tzinfo is None:
             cur_start = cur_start.replace(tzinfo=CN_TZ)
         if cur_end.tzinfo is None:
             cur_end = cur_end.replace(tzinfo=CN_TZ)
+        if end_is_date_only:
+            cur_end = cur_end + timedelta(days=1)
         length = cur_end - cur_start
         prev_end = cur_start
         prev_start = cur_start - length
@@ -174,7 +177,7 @@ async def _fetch_metric_buckets(
         WITH series AS (
             SELECT generate_series(
                 DATE_TRUNC('{trunc}', $2::timestamptz AT TIME ZONE 'Asia/Shanghai'),
-                DATE_TRUNC('{trunc}', $3::timestamptz AT TIME ZONE 'Asia/Shanghai'),
+                DATE_TRUNC('{trunc}', (($3::timestamptz AT TIME ZONE 'Asia/Shanghai') - INTERVAL '1 microsecond')),
                 INTERVAL '{step}'
             ) AS bucket
         ),
@@ -192,7 +195,8 @@ async def _fetch_metric_buckets(
             LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
             JOIN users u ON u.id = te.user_id
             WHERE u.tenant_id = $1
-              AND COALESCE(te.finished_at, te.started_at) BETWEEN $2 AND $3
+              AND COALESCE(te.finished_at, te.started_at) >= $2
+              AND COALESCE(te.finished_at, te.started_at) < $3
               AND NOT te.is_deleted
               AND NOT u.is_deleted
             GROUP BY bucket
@@ -237,7 +241,8 @@ async def _fetch_period_totals(
         LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
         JOIN users u ON u.id = te.user_id
         WHERE u.tenant_id = $1
-          AND COALESCE(te.finished_at, te.started_at) BETWEEN $2 AND $3
+          AND COALESCE(te.finished_at, te.started_at) >= $2
+          AND COALESCE(te.finished_at, te.started_at) < $3
           AND NOT te.is_deleted
           AND NOT u.is_deleted
         """,
@@ -264,7 +269,8 @@ async def _fetch_period_credits(
         JOIN users u ON u.id = cf.user_id
         WHERE u.tenant_id = $1
           AND cf.change_type = 'CONSUME'
-          AND cf.created_at BETWEEN $2 AND $3
+          AND cf.created_at >= $2
+          AND cf.created_at < $3
           AND NOT u.is_deleted
         """,
         tenant_id,
@@ -454,7 +460,8 @@ async def aggregate_aggregations(
                    COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
             FROM users u
             LEFT JOIN task_execution te ON te.user_id = u.id
-                AND COALESCE(te.finished_at, te.started_at) BETWEEN $2 AND $3
+                AND COALESCE(te.finished_at, te.started_at) >= $2
+                AND COALESCE(te.finished_at, te.started_at) < $3
                 AND NOT te.is_deleted
             LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
             WHERE u.tenant_id = $1 AND NOT u.is_deleted
@@ -469,7 +476,8 @@ async def aggregate_aggregations(
             FROM credit_flow cf
             JOIN users u ON u.id = cf.user_id
             WHERE u.tenant_id = $1 AND cf.change_type = 'CONSUME'
-              AND cf.created_at BETWEEN $2 AND $3
+              AND cf.created_at >= $2
+              AND cf.created_at < $3
               AND NOT u.is_deleted
             GROUP BY cf.user_id
             """,
@@ -493,7 +501,8 @@ async def aggregate_aggregations(
                    COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
             FROM user_task ut
             LEFT JOIN task_execution te ON te.task_id = ut.id
-                AND COALESCE(te.finished_at, te.started_at) BETWEEN $2 AND $3
+                AND COALESCE(te.finished_at, te.started_at) >= $2
+                AND COALESCE(te.finished_at, te.started_at) < $3
                 AND NOT te.is_deleted
             LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
             JOIN users u ON u.id = ut.user_id
@@ -516,7 +525,8 @@ async def aggregate_aggregations(
                                      AND CASE WHEN cf.ref_id ~ '^[0-9]+$' THEN cf.ref_id::int END = ur.id
             WHERE u.tenant_id = $1
               AND te.task_id IS NOT NULL
-              AND COALESCE(te.finished_at, te.started_at) BETWEEN $2 AND $3
+              AND COALESCE(te.finished_at, te.started_at) >= $2
+              AND COALESCE(te.finished_at, te.started_at) < $3
               AND NOT te.is_deleted
               AND NOT u.is_deleted
             GROUP BY te.task_id
@@ -540,7 +550,8 @@ async def aggregate_aggregations(
             JOIN users u ON u.id = te.user_id
             WHERE u.tenant_id = $1
               AND te.device_id IS NOT NULL
-              AND COALESCE(te.finished_at, te.started_at) BETWEEN $2 AND $3
+              AND COALESCE(te.finished_at, te.started_at) >= $2
+              AND COALESCE(te.finished_at, te.started_at) < $3
               AND NOT te.is_deleted AND NOT u.is_deleted
             GROUP BY te.device_id
             ORDER BY exec_count DESC
@@ -559,7 +570,8 @@ async def aggregate_aggregations(
                                      AND CASE WHEN cf.ref_id ~ '^[0-9]+$' THEN cf.ref_id::int END = ur.id
             WHERE u.tenant_id = $1
               AND te.device_id IS NOT NULL
-              AND COALESCE(te.finished_at, te.started_at) BETWEEN $2 AND $3
+              AND COALESCE(te.finished_at, te.started_at) >= $2
+              AND COALESCE(te.finished_at, te.started_at) < $3
               AND NOT te.is_deleted
               AND NOT u.is_deleted
             GROUP BY te.device_id
@@ -577,7 +589,8 @@ async def aggregate_aggregations(
             JOIN users u ON u.id = te.user_id
             WHERE u.tenant_id = $1
               AND te.device_id IS NOT NULL
-              AND COALESCE(te.finished_at, te.started_at) BETWEEN $2 AND $3
+              AND COALESCE(te.finished_at, te.started_at) >= $2
+              AND COALESCE(te.finished_at, te.started_at) < $3
               AND NOT te.is_deleted AND NOT u.is_deleted
             GROUP BY te.device_id, ebs.platform
             """,
@@ -735,7 +748,8 @@ async def aggregate_charts(
         JOIN users u ON u.id = te.user_id
         WHERE u.tenant_id = $1
           AND {_success_filter_sql('te')}
-          AND COALESCE(te.finished_at, te.started_at) BETWEEN $2 AND $3
+          AND COALESCE(te.finished_at, te.started_at) >= $2
+          AND COALESCE(te.finished_at, te.started_at) < $3
           AND NOT te.is_deleted AND NOT u.is_deleted
     """
 
@@ -748,7 +762,8 @@ async def aggregate_charts(
             LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
             JOIN users u ON u.id = te.user_id
             WHERE u.tenant_id = $1
-              AND COALESCE(te.finished_at, te.started_at) BETWEEN $2 AND $3
+              AND COALESCE(te.finished_at, te.started_at) >= $2
+              AND COALESCE(te.finished_at, te.started_at) < $3
               AND NOT te.is_deleted AND NOT u.is_deleted
             GROUP BY ebs.platform
             HAVING COALESCE(SUM(ebs.unique_reach), 0) > 0

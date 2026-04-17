@@ -6,7 +6,8 @@ import { smoothToggleCollapse } from './utils'
 var sortState: { col: string; dir: 'asc' | 'desc' } = { col: '', dir: 'asc' };
 var searchQuery = '';
 var scenarioInteractionSortKeys = ['comments', 'likes', 'favorites', 'dms', 'uniqueReach']
-let skillTooltipEl: HTMLElement | null = null;
+let skillNameTipEl: HTMLElement | null = null;
+let skillNameTipTimer: number | null = null;
 
 function escapeSkillText(value: any): string {
   return String(value || '')
@@ -16,42 +17,98 @@ function escapeSkillText(value: any): string {
     .replace(/>/g, '&gt;')
 }
 
-function showSkillTooltip(anchor: HTMLElement, text: string): void {
-  hideSkillTooltip();
-  const el = document.createElement("div");
-  el.className = "skill-tooltip";
-  el.textContent = text;
-  document.body.appendChild(el);
-  const rect = anchor.getBoundingClientRect();
-  let top = rect.bottom + 6;
-  let left = rect.left;
-  const maxW = 380;
-  if (left + maxW > window.innerWidth - 8) left = window.innerWidth - maxW - 8;
-  if (left < 8) left = 8;
-  el.style.top = top + "px";
-  el.style.left = left + "px";
-  skillTooltipEl = el;
+function getSkillNameTarget(target: EventTarget | null): HTMLElement | null {
+  if (!(target instanceof HTMLElement)) return null
+  return target.closest('.td-skill-name') as HTMLElement | null
 }
 
-function hideSkillTooltip(): void {
-  if (skillTooltipEl) { skillTooltipEl.remove(); skillTooltipEl = null; }
+function clearSkillNameTipTimer(): void {
+  if (skillNameTipTimer == null) return
+  window.clearTimeout(skillNameTipTimer)
+  skillNameTipTimer = null
 }
 
-if (typeof window !== 'undefined' && !(window as any).__skillTooltipBound) {
-  (window as any).__skillTooltipBound = true;
-  document.addEventListener("mouseenter", function(e: Event) {
-    const target = e.target as HTMLElement;
-    if (!target || !target.classList || !target.classList.contains("td-skill-name")) return;
-    const full = target.getAttribute("data-full") || target.textContent || "";
-    if (!full.trim()) return;
-    if (target.scrollWidth <= target.clientWidth) return;
-    showSkillTooltip(target, full);
-  }, true);
-  document.addEventListener("mouseleave", function(e: Event) {
-    const target = e.target as HTMLElement;
-    if (!target || !target.classList || !target.classList.contains("td-skill-name")) return;
-    hideSkillTooltip();
-  }, true);
+function ensureSkillNameTip(): HTMLElement {
+  clearSkillNameTipTimer()
+  if (skillNameTipEl) return skillNameTipEl
+  skillNameTipEl = document.createElement('div')
+  skillNameTipEl.className = 'skill-name-tip'
+  document.body.appendChild(skillNameTipEl)
+  return skillNameTipEl
+}
+
+function updateSkillNameTipPosition(e: MouseEvent): void {
+  if (!skillNameTipEl) return
+  var left = e.clientX + 12
+  var maxLeft = Math.max(8, window.innerWidth - skillNameTipEl.offsetWidth - 8)
+  if (left > maxLeft) left = maxLeft
+  if (left < 8) left = 8
+  skillNameTipEl.style.top = (e.clientY - 40) + 'px'
+  skillNameTipEl.style.left = left + 'px'
+}
+
+function showSkillNameTip(text: string, e: MouseEvent): void {
+  var tip = ensureSkillNameTip()
+  tip.textContent = text
+  updateSkillNameTipPosition(e)
+  tip.classList.add('visible')
+}
+
+function hideSkillNameTip(): void {
+  if (!skillNameTipEl) return
+  clearSkillNameTipTimer()
+  skillNameTipEl.classList.remove('visible')
+  skillNameTipTimer = window.setTimeout(function() {
+    if (!skillNameTipEl || skillNameTipEl.classList.contains('visible')) return
+    skillNameTipEl.remove()
+    skillNameTipEl = null
+    skillNameTipTimer = null
+  }, 160)
+}
+
+function bindSkillNamePopout(container: HTMLElement): void {
+  var tipContainer = container as HTMLElement & { __tipBound?: boolean }
+  if (tipContainer.__tipBound) return
+  tipContainer.__tipBound = true
+
+  container.addEventListener('mouseover', function(e: MouseEvent) {
+    var target = getSkillNameTarget(e.target)
+    if (!target || !container.contains(target)) return
+    var full = target.getAttribute('data-full') || target.textContent || ''
+    if (!full.trim()) return
+    if (target.scrollWidth <= target.clientWidth) return
+    showSkillNameTip(full, e)
+  })
+
+  container.addEventListener('mouseout', function(e: MouseEvent) {
+    var target = getSkillNameTarget(e.target)
+    if (!target || !container.contains(target)) return
+    hideSkillNameTip()
+  })
+
+  container.addEventListener('mousemove', function(e: MouseEvent) {
+    var target = getSkillNameTarget(e.target)
+    if (!target || !container.contains(target)) return
+    if (target.scrollWidth <= target.clientWidth) return
+    updateSkillNameTipPosition(e)
+  })
+}
+
+function syncSkillNameTruncation(container: HTMLElement): void {
+  requestAnimationFrame(function() {
+    container.querySelectorAll('.td-skill-name').forEach(function(node) {
+      var name = node as HTMLElement
+      var truncated = name.scrollWidth > name.clientWidth
+      var cell = name.closest('.td-skill')
+      if (truncated) {
+        name.setAttribute('data-truncated', 'true')
+        if (cell) cell.classList.add('is-truncated')
+      } else {
+        name.removeAttribute('data-truncated')
+        if (cell) cell.classList.remove('is-truncated')
+      }
+    })
+  })
 }
 
 function parseScenarioDuration(value: any) {
@@ -197,18 +254,8 @@ export function renderScenarioCards() {
     </div>`;
   }).join('');
 
-  requestAnimationFrame(function() {
-    var nodes = container.querySelectorAll('.td-skill');
-    nodes.forEach(function(td) {
-      var name = td.querySelector('.td-skill-name') as HTMLElement | null;
-      if (!name) return;
-      if (name.scrollWidth > name.offsetWidth + 1) {
-        td.classList.add('is-truncated');
-      } else {
-        td.classList.remove('is-truncated');
-      }
-    });
-  });
+  bindSkillNamePopout(container)
+  syncSkillNameTruncation(container)
 }
 
 export function renderScenarioCardsFull(containerId?: string, idPrefix?: string) {
@@ -264,18 +311,8 @@ export function renderScenarioCardsFull(containerId?: string, idPrefix?: string)
     container.innerHTML = '<div style="padding:20px;text-align:center;color:#a1a1aa;font-size:12px;">暂无场景数据</div>';
   }
 
-  requestAnimationFrame(function() {
-    var nodes = container.querySelectorAll('.td-skill');
-    nodes.forEach(function(td) {
-      var name = td.querySelector('.td-skill-name') as HTMLElement | null;
-      if (!name) return;
-      if (name.scrollWidth > name.offsetWidth + 1) {
-        td.classList.add('is-truncated');
-      } else {
-        td.classList.remove('is-truncated');
-      }
-    });
-  });
+  bindSkillNamePopout(container)
+  syncSkillNameTruncation(container)
 }
 
 export function sortScenario(col: string) {

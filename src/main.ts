@@ -110,10 +110,7 @@ function applyMiniStats(mini: any, range?: string, highlights?: any) {
   var costPrev = pickMetricValue([
     ['cost_prev', mini.cost_prev],
   ])
-  // sidebar mini stats
-  setText('miniExec', String(successCur ?? 0))
-  setText('miniRuntime', runtime)
-  setText('miniCost', String(cost))
+  applyMiniStatsRow(String(successCur ?? 0), runtime, String(cost))
   // dashTab-ops stats card
   setText('statExec', String(successCur ?? 0))
   setText('statRuntime', runtime)
@@ -121,6 +118,18 @@ function applyMiniStats(mini: any, range?: string, highlights?: any) {
   renderStatChange('statExecChange', successCur ?? 0, successPrev, range)
   renderStatChange('statRuntimeChange', runtimeCurHours ?? 0, runtimePrevHours, range)
   renderStatChange('statCostChange', costCur ?? 0, costPrev, range)
+}
+
+function applyMiniStatsRow(exec: string, runtime: string, cost: string) {
+  var miniExec = document.getElementById('miniExec')
+  if (!miniExec) return
+  var miniRuntime = document.getElementById('miniRuntime')
+  if (!miniRuntime) return
+  var miniCost = document.getElementById('miniCost')
+  if (!miniCost) return
+  miniExec.textContent = exec
+  miniRuntime.textContent = runtime
+  miniCost.textContent = cost
 }
 
 function getCompareLabelForRange(range?: string): string {
