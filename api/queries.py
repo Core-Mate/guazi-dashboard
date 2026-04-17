@@ -1070,9 +1070,11 @@ async def stats_trend(pool: Pool, days: int, tenant_id: int) -> dict[str, list[A
                     COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
                     COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
                     COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach,
+                    COALESCE(SUM(ur.credits_used), 0)::bigint AS credits,
                     COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float / 3600.0 AS runtime_h
                 FROM task_execution te
                 LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
+                LEFT JOIN usage_record ur ON ur.task_id = te.id::varchar
                 JOIN users u ON u.id = te.user_id
                 WHERE te.started_at >= DATE_TRUNC('day', NOW())
                   AND u.tenant_id = $1
@@ -1088,6 +1090,7 @@ async def stats_trend(pool: Pool, days: int, tenant_id: int) -> dict[str, list[A
                 COALESCE(te_agg.likes, 0) AS likes,
                 COALESCE(te_agg.dms, 0) AS dms,
                 COALESCE(te_agg.reach, 0) AS reach,
+                COALESCE(te_agg.credits, 0) AS credits,
                 COALESCE(te_agg.runtime_h, 0) AS runtime_h
             FROM hours
             LEFT JOIN te_agg USING (day_hour)
@@ -1119,9 +1122,11 @@ async def stats_trend(pool: Pool, days: int, tenant_id: int) -> dict[str, list[A
                     COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
                     COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
                     COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach,
+                    COALESCE(SUM(ur.credits_used), 0)::bigint AS credits,
                     COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float / 3600.0 AS runtime_h
                 FROM task_execution te
                 LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
+                LEFT JOIN usage_record ur ON ur.task_id = te.id::varchar
                 JOIN users u ON u.id = te.user_id
                 WHERE te.started_at >= (NOW()::date - ($2::int - 1))
                   AND te.started_at < (NOW()::date + INTERVAL '1 day')
@@ -1138,6 +1143,7 @@ async def stats_trend(pool: Pool, days: int, tenant_id: int) -> dict[str, list[A
                 COALESCE(te_agg.likes, 0) AS likes,
                 COALESCE(te_agg.dms, 0) AS dms,
                 COALESCE(te_agg.reach, 0) AS reach,
+                COALESCE(te_agg.credits, 0) AS credits,
                 COALESCE(te_agg.runtime_h, 0) AS runtime_h
             FROM dates
             LEFT JOIN te_agg USING (day)
@@ -1157,6 +1163,7 @@ async def stats_trend(pool: Pool, days: int, tenant_id: int) -> dict[str, list[A
         "likes": [row["likes"] for row in rows],
         "dms": [row["dms"] for row in rows],
         "reach": [row["reach"] for row in rows],
+        "credits": [row["credits"] for row in rows],
         "runtime": [round(float(row["runtime_h"] or 0), 1) for row in rows],
     }
 

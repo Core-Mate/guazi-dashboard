@@ -53,6 +53,7 @@ export interface DashboardSnapshot {
     failed?: any[];
     total?: any[];
     cost: any[];
+    credits?: number[];
     reach: any[];
     comments: any[];
     likes: any[];
@@ -119,6 +120,7 @@ export const EMPTY_SNAPSHOT: DashboardSnapshot = {
     failed: [],
     total: [],
     cost: [],
+    credits: [],
     reach: [],
     comments: [],
     likes: [],
@@ -450,6 +452,7 @@ export async function tryLiveOpsData(range: string, custom?: { start: string; en
   var dms = trend.dms && trend.dms.length ? trend.dms : [];
   var reach = trend.reach && trend.reach.length ? trend.reach : [];
   var runtime = trend.runtime && trend.runtime.length ? trend.runtime : [];
+  var credits = trend.credits && trend.credits.length ? trend.credits : [];
 
   return {
     dates: dates,
@@ -460,6 +463,7 @@ export async function tryLiveOpsData(range: string, custom?: { start: string; en
     likes: likes,
     dms: dms,
     reach: reach,
+    credits: credits,
     runtime: runtime,
   };
 }
