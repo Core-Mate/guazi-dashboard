@@ -395,6 +395,7 @@ export function drawSparkline(canvas, data, color) {
   canvas.height = Math.round(cssH * dpr);
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const strokeColor = color || 'rgba(59,130,246,0.9)';
   const max = Math.max(...data);
   const min = Math.min(...data);
   const range = max - min || 1;
@@ -402,9 +403,11 @@ export function drawSparkline(canvas, data, color) {
     ctx.beginPath();
     ctx.moveTo(0, cssH / 2);
     ctx.lineTo(cssW, cssH / 2);
-    ctx.strokeStyle = color + '60';
+    ctx.strokeStyle = strokeColor;
     ctx.lineWidth = 1.5;
     ctx.setLineDash([2, 3]);
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
     ctx.stroke();
     ctx.setLineDash([]);
     return;
@@ -412,6 +415,10 @@ export function drawSparkline(canvas, data, color) {
   const padTop = 3, padBottom = 4;
   const drawH = cssH - padTop - padBottom;
   const step = cssW / (data.length - 1);
+  const baseline = cssH;
+  const fillGradient = ctx.createLinearGradient(0, 0, 0, cssH);
+  fillGradient.addColorStop(0, 'rgba(59,130,246,0.18)');
+  fillGradient.addColorStop(1, 'rgba(59,130,246,0)');
   function getY(v) { return padTop + drawH - ((v - min) / range) * drawH; }
   // 填充区域
   ctx.beginPath();
@@ -424,10 +431,10 @@ export function drawSparkline(canvas, data, color) {
       ctx.bezierCurveTo(cpx, py, cpx, y, x, y);
     }
   });
-  ctx.lineTo((data.length - 1) * step, cssH);
-  ctx.lineTo(0, cssH);
+  ctx.lineTo((data.length - 1) * step, baseline);
+  ctx.lineTo(0, baseline);
   ctx.closePath();
-  ctx.fillStyle = color + '18';
+  ctx.fillStyle = fillGradient;
   ctx.fill();
   // 折线
   ctx.beginPath();
@@ -440,7 +447,7 @@ export function drawSparkline(canvas, data, color) {
       ctx.bezierCurveTo(cpx, py, cpx, y, x, y);
     }
   });
-  ctx.strokeStyle = color;
+  ctx.strokeStyle = strokeColor;
   ctx.lineWidth = 1.5;
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
@@ -503,20 +510,21 @@ function buildPopoutChart(canvas, card: HighlightCard, color) {
   if (!card || !card.series || !card.series.values || !card.series.values.length) return;
   var data = card.series.values;
   var labels = card.series.labels && card.series.labels.length ? card.series.labels : data.map(function(_value, index) { return String(index + 1); });
+  var popoutStrokeColor = 'rgba(59,130,246,0.9)';
   return new Chart(canvas, {
     type: 'line',
     data: {
       labels: labels,
       datasets: [{
         data: data,
-        borderColor: color,
+        borderColor: popoutStrokeColor,
         backgroundColor: color + '15',
         fill: true,
         tension: 0.4,
         cubicInterpolationMode: 'monotone',
         pointRadius: 0,
         pointHoverRadius: 5,
-        pointBackgroundColor: color,
+        pointBackgroundColor: popoutStrokeColor,
         pointBorderColor: '#fff',
         pointBorderWidth: 1.5,
         borderWidth: 2,
@@ -531,7 +539,7 @@ function buildPopoutChart(canvas, card: HighlightCard, color) {
       },
       scales: {
         x: { grid: { display: false }, ticks: { font: { size: 10 }, color: '#a1a1aa', maxTicksLimit: 7, autoSkip: true, maxRotation: 0 } },
-        y: { grid: { color: '#f4f4f5' }, ticks: { font: { size: 10 }, color: '#a1a1aa' }, beginAtZero: false, grace: '8%' }
+        y: { grid: { color: 'rgba(15,23,42,0.04)' }, ticks: { font: { size: 10 }, color: '#a1a1aa' }, beginAtZero: false, grace: '8%' }
       },
       interaction: { mode: 'index', intersect: false },
       animation: { duration: 250 },
@@ -788,7 +796,7 @@ export function createDonutChart(range) {
       datasets: [{ data: data.map(d => d.value), backgroundColor: data.map(d => d.color), borderWidth: 2, borderColor: '#fff', hoverOffset: 6 }]
     },
     options: {
-      cutout: '68%', responsive: true, maintainAspectRatio: true,
+      cutout: '68%', responsive: true, maintainAspectRatio: true, aspectRatio: 1,
       onHover: function(_e, elements) {
         var center = canvas.parentElement && canvas.parentElement.querySelector('.donut-center') as HTMLElement | null;
         if (center) { center.style.transition = 'opacity .15s'; center.style.opacity = elements.length > 0 ? '0' : '1'; }
@@ -823,7 +831,7 @@ export function createInteractionDonut(range) {
       datasets: [{ data: data.map(d => d.value), backgroundColor: data.map(d => d.color), borderWidth: 2, borderColor: '#fff', hoverOffset: 6 }]
     },
     options: {
-      cutout: '68%', responsive: true, maintainAspectRatio: true,
+      cutout: '68%', responsive: true, maintainAspectRatio: true, aspectRatio: 1,
       onHover: function(_e, elements) {
         var center = canvas.parentElement && canvas.parentElement.querySelector('.donut-center') as HTMLElement | null;
         if (center) { center.style.transition = 'opacity .15s'; center.style.opacity = elements.length > 0 ? '0' : '1'; }

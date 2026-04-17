@@ -59,9 +59,26 @@ function pickHoursValue(sources: Array<[string, any]>): number | null {
   return null
 }
 
-function applyMiniStats(mini: any, range?: string) {
+function pickHighlightExecValue(highlights: any): number | null {
+  var cards = Array.isArray(highlights)
+    ? highlights
+    : (highlights && Array.isArray(highlights.cards) ? highlights.cards : [])
+  for (var i = 0; i < cards.length; i++) {
+    var card = cards[i]
+    var key = String(card && card.key != null ? card.key : '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '')
+    if (key === 'complete' || key === 'success' || key === 'successcount') {
+      return parseMetricValue(card && card.value)
+    }
+  }
+  return null
+}
+
+function applyMiniStats(mini: any, range?: string, highlights?: any) {
   if (!mini) return
   var exec = mini.exec ?? mini.executions ?? mini.total_executions ?? 0
+  var execHighlightValue = pickHighlightExecValue(highlights)
   var runtimeRaw = mini.runtime ?? mini.total_duration ?? mini.total_duration_hours ?? '0h'
   var runtime = typeof runtimeRaw === 'number' ? Math.round(runtimeRaw) + 'h' : String(runtimeRaw)
   var cost = mini.cost ?? mini.credits ?? mini.total_credits ?? 0
@@ -95,7 +112,7 @@ function applyMiniStats(mini: any, range?: string) {
     ['cost_prev', mini.cost_prev],
   ])
   // sidebar mini stats
-  setText('miniExec', String(exec))
+  setText('miniExec', String(execHighlightValue != null ? execHighlightValue : exec))
   setText('miniRuntime', runtime)
   setText('miniCost', String(cost))
   // dashTab-ops stats card
@@ -134,7 +151,7 @@ async function bootDashboardSnapshot(range = '7d', custom?: { start: string; end
   var snap = await fetchDashboardData(range, custom)
   renderHighlightCards(snap.highlights.cards, range)
   renderAchievements(snap.achievements.achievements)
-  if (snap.charts?.mini_stats) applyMiniStats(snap.charts.mini_stats, range)
+  if (snap.charts?.mini_stats) applyMiniStats(snap.charts.mini_stats, range, snap.highlights)
   if (snap.charts?.platform_breakdown) {
     PLATFORM_BREAKDOWN[range] = snap.charts.platform_breakdown
     createDonutChart(range)

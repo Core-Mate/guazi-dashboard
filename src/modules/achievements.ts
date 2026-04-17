@@ -133,7 +133,7 @@ function renderAchievementItems(items: any[]) {
     var changeCls = achievementChangeClass(change, compareMeta ? compareMeta.cls : (it && it.change_cls ? it.change_cls : ''))
     var detail = it && (it.compare || it.detail) ? (it.compare || it.detail) : ''
     return `
-    <div class="achievement-tag achieve-${it.theme || 'blue'}">
+    <div class="achievement-tag">
       <div class="achieve-row1">
         <span class="achieve-emoji">${escapeAchievementText(it && it.emoji ? it.emoji : '✨')}</span>
         ${headline ? `<span class="achieve-headline" data-full="${escapeAchievementText(headlineFull)}">${escapeAchievementText(headline)}</span>` : ''}
