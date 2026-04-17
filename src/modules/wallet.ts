@@ -1,40 +1,94 @@
 import { openModal, closeModal, showToast } from './modal-toast'
-import { getStatNum, setStatNum, getToday, prependTransaction } from './utils'
-import { oplogData } from '../data/records'
+import { addTransactionRecord, addOplogRecord } from '../data/records'
 import { membersData } from '../data/members'
+import { apiDistributeCredits, fetchWallet } from '../data/api'
+import { renderMembers } from './members'
+import { animateNumber } from './animate'
+import { renderOverviewOplogTable } from './records'
+import { fetchMembers as fetchMembersApi } from './api-integration'
+
+function startLoading(label?: string) {
+  var btn = document.querySelector('#modalFooter .modal-btn:not(.modal-btn-cancel)') as HTMLButtonElement;
+  if (btn) { btn.disabled = true; btn.classList.add('btn-loading'); btn.textContent = label || '处理中...'; }
+  return btn;
+}
+function stopLoading(btn: HTMLButtonElement, label: string) {
+  if (btn) { btn.disabled = false; btn.classList.remove('btn-loading'); btn.textContent = label; }
+}
 
 export function renderOverviewOplog() {
-  var body = document.getElementById('overviewOplogTbody');
-  if (!body) return;
-  var recent = oplogData.slice(0, 5);
-  body.innerHTML = recent.map(function(item) {
-    return '<tr><td class="text-muted">' + item.time + '</td><td>' + item.operator + '</td><td>' + item.action + '</td><td>' + item.target + '<span class="text-muted"> · ' + item.result + '</span></td></tr>';
-  }).join('');
+  renderOverviewOplogTable(10);
 }
 
-export function openDistributeToMember(id){
-  var m = membersData.find(function(x){ return x.id === id; });
+export function openDistributeToMember(id) {
+  var m = membersData.find(function(x) { return x.id === id; });
   if (!m) return;
-  var body='<div class="modal-field"><label class="modal-label">成员</label><div style="font-size:14px;font-weight:500;padding:8px 0;">'+m.name+'</div></div><div class="modal-field"><label class="modal-label">分发数量</label><input class="modal-input" id="dAmount" type="number" min="1" placeholder="请输入算力豆数量"></div><div class="modal-field"><label class="modal-label">备注（可选）</label><input class="modal-input" id="dNote" type="text" placeholder="备注说明"></div><input type="hidden" id="dMember" value="'+m.name+'">';
-  var footer='<button class="modal-btn modal-btn-cancel" onclick="closeModal()">取消</button><button class="modal-btn modal-btn-primary" onclick="confirmDistribute()">确认分发</button>';
-  openModal('分发算力豆给 '+m.name,body,footer);
+  var body = '<div class="modal-field"><label class="modal-label">成员</label><div style="font-size:14px;font-weight:500;padding:8px 0;">'+m.name+'</div></div>' +
+    '<div class="modal-field"><label class="modal-label">分发数量</label><input class="modal-input" id="dAmount" type="number" min="1" placeholder="请输入算力豆数量"></div>' +
+    '<div class="modal-field"><label class="modal-label">备注（可选）</label><input class="modal-input" id="dNote" type="text" placeholder="备注说明"></div>' +
+    '<input type="hidden" id="dMemberId" value="'+m.id+'">';
+  var footer = '<button class="modal-btn modal-btn-cancel" onclick="closeModal()">取消</button><button class="modal-btn modal-btn-primary" onclick="confirmDistribute()">确认分发</button>';
+  openModal('分发算力豆给 '+m.name, body, footer);
 }
 
-export function openDistributeModal(){
-  var opts = membersData.map(function(m) { return '<option value="'+m.name+'">'+m.name+'</option>'; }).join('');
-  var body='<div class="modal-field"><label class="modal-label">选择成员</label><select class="modal-select" id="dMember">'+opts+'</select></div><div class="modal-field"><label class="modal-label">分发数量</label><input class="modal-input" id="dAmount" type="number" min="1" placeholder="请输入算力豆数量"></div><div class="modal-field"><label class="modal-label">备注（可选）</label><input class="modal-input" id="dNote" type="text" placeholder="备注说明"></div>';
-  var footer='<button class="modal-btn modal-btn-cancel" onclick="closeModal()">取消</button><button class="modal-btn modal-btn-primary" onclick="confirmDistribute()">确认分发</button>';
-  openModal('分发算力豆',body,footer);
+export function openDistributeModal() {
+  var nonAdmin = membersData.filter(function(m) { return m.role !== 'admin'; });
+  var opts = nonAdmin.map(function(m) { return '<option value="'+m.id+'">'+m.name+'</option>'; }).join('');
+  var body = '<div class="modal-field"><label class="modal-label">选择成员</label><select class="modal-select" id="dMemberId">'+opts+'</select></div>' +
+    '<div class="modal-field"><label class="modal-label">分发数量</label><input class="modal-input" id="dAmount" type="number" min="1" placeholder="请输入算力豆数量"></div>' +
+    '<div class="modal-field"><label class="modal-label">备注（可选）</label><input class="modal-input" id="dNote" type="text" placeholder="备注说明"></div>';
+  var footer = '<button class="modal-btn modal-btn-cancel" onclick="closeModal()">取消</button><button class="modal-btn modal-btn-primary" onclick="confirmDistribute()">确认分发</button>';
+  openModal('分发算力豆', body, footer);
 }
 
-export function confirmDistribute(){
-  var member=document.getElementById('dMember').value;
-  var amount=parseInt(document.getElementById('dAmount').value)||0;
-  if(amount<=0){alert('请输入有效算力豆数量');return;}
-  var wallet=getStatNum('statWallet');
-  if(amount>wallet){alert('余额不足');return;}
-  setStatNum('statWallet',wallet-amount);
-  prependTransaction(getToday(),'分发','-'+amount.toLocaleString('en-US')+'算力豆',member,'成功');
+export async function confirmDistribute() {
+  var memberIdEl = document.getElementById('dMemberId') as HTMLInputElement | HTMLSelectElement;
+  if (!memberIdEl) return;
+  var memberId = parseInt(memberIdEl.value);
+  var amount = parseInt((document.getElementById('dAmount') as HTMLInputElement).value) || 0;
+  var noteEl = document.getElementById('dNote') as HTMLInputElement;
+  var note = noteEl ? noteEl.value.trim() : '';
+
+  if (!memberId || isNaN(memberId)) { showToast('请选择成员', 'error'); return; }
+  if (amount <= 0) { showToast('请输入有效算力豆数量', 'error'); return; }
+
+  var btn = startLoading();
+  var member = membersData.find(function(x) { return x.id === memberId; });
+  var memberName = member ? member.name : '未知';
+  var operator = '管理员';
+  var operatorMember = membersData.find(function(x) { return x.role === 'admin'; });
+  if (operatorMember) operator = operatorMember.name;
+
+  var admin = membersData.find(function(x) { return x.role === 'admin'; });
+  if (!admin) { stopLoading(btn, '确认分发'); showToast('找不到管理员账号', 'error'); return; }
+  if (amount > admin.balance) { stopLoading(btn, '确认分发'); showToast('管理员余额不足', 'error'); return; }
+
+  var res = await apiDistributeCredits(admin.id, memberId, amount, note || '分发算力豆');
+  if (!res.ok) { stopLoading(btn, '确认分发'); showToast(res.error || '分发失败', 'error'); return; }
+
   closeModal();
-  showToast('✓ 成功分发 '+amount.toLocaleString('en-US')+' 算力豆给 '+member,'success');
+  addTransactionRecord(operator, '分发', '分发给 ' + memberName + ' ' + amount.toLocaleString() + ' 算力豆', -amount);
+  addOplogRecord(operator, '分发算力豆', '分发 ' + amount.toLocaleString() + ' 算力豆给 ' + memberName);
+  renderOverviewOplog();
+  showToast('✓ 成功分发 ' + amount.toLocaleString() + ' 算力豆给 ' + memberName, 'success');
+
+  var walletData = await fetchWallet();
+  if (walletData) {
+    animateNumber(document.getElementById('statWallet'), Math.round(walletData.total_balance));
+    animateNumber(document.getElementById('statConsumed'), Math.round(walletData.total_consumed));
+  }
+
+  var membData = await fetchMembersApi();
+  membersData.length = 0;
+  membData.forEach(function(m) {
+    membersData.push({
+      id: m.id,
+      name: m.username || '未知',
+      phone: m.phone || '',
+      role: m.role === 'admin' ? 'admin' : 'member',
+      balance: Math.round(m.balance),
+      joinDate: m.join_date ? m.join_date.slice(0, 10) : '',
+    });
+  });
+  renderMembers();
 }

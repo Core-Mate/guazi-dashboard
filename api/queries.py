@@ -1,8 +1,917 @@
+from __future__ import annotations
+
+import asyncio
 import json
+import re
+import sys
 from collections import defaultdict
-from typing import Any
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
 
 from asyncpg import Pool
+
+TENANT_SCOPED_TABLES = {
+    "users", "credit_flow", "task_execution", "task_draft",
+    "skill", "execution_behavior_stat",
+}
+
+try:
+    from copywriting import generate_achievement
+except ImportError:  # pragma: no cover
+    def generate_achievement(*args, **kwargs):
+        return None
+
+
+CN_TZ = timezone(timedelta(hours=8))
+
+
+# DB enum platformtype 实际值:
+# XIAOHONGSHU, DOUYIN, KUAISHOU, WECHAT, LARK, ZOOM,
+# LINKEDIN, INSTAGRAM, TIKTOK, X, REDDIT, PINTEREST, GENERAL_APP
+PLATFORM_META = {
+    "XIAOHONGSHU": {"name": "小红书", "color": "#ff2741"},
+    "DOUYIN": {"name": "抖音", "color": "#000000"},
+    "KUAISHOU": {"name": "快手", "color": "#ff5500"},
+    "WECHAT": {"name": "微信", "color": "#07c160"},
+    "LARK": {"name": "飞书", "color": "#3370ff"},
+    "ZOOM": {"name": "Zoom", "color": "#2d8cff"},
+    "LINKEDIN": {"name": "LinkedIn", "color": "#0a66c2"},
+    "INSTAGRAM": {"name": "Instagram", "color": "#e4405f"},
+    "TIKTOK": {"name": "TikTok", "color": "#000000"},
+    "X": {"name": "X", "color": "#1da1f2"},
+    "REDDIT": {"name": "Reddit", "color": "#ff4500"},
+    "PINTEREST": {"name": "Pinterest", "color": "#e60023"},
+    "GENERAL_APP": {"name": "其他", "color": "#94a3b8"},
+}
+
+INTERACTION_META = [
+    ("comments", "评论", "#2563eb"),
+    ("likes", "点赞", "#3b82f6"),
+    ("saves", "收藏", "#60a5fa"),
+    ("dms", "私信", "#93c5fd"),
+]
+
+CATEGORY_META = {
+    "acquire": {"label": "🎯 获客触达", "emoji": "🎯", "color": "#ff6900"},
+    "research": {"label": "📊 内容调研", "emoji": "📊", "color": "#4caf50"},
+    "ops": {"label": "🛠️ 运营协作", "emoji": "🛠️", "color": "#2196f3"},
+}
+
+# 把 user_task.category (DB enum: taskcategory) 映射到 dashboard 三大组
+# DB enum 实际值: CONTENT_PUBLISH, SOCIAL_INTERACT, AUTO_REPLY, DATA_COLLECT, CUSTOM
+CATEGORY_GROUP = {
+    "CONTENT_PUBLISH": "ops",
+    "SOCIAL_INTERACT": "acquire",
+    "AUTO_REPLY": "acquire",
+    "DATA_COLLECT": "research",
+    "CUSTOM": "research",
+}
+
+TASK_GROUP_LABEL = {
+    "acquire": "获客触达",
+    "research": "内容调研",
+    "ops": "运营协作",
+}
+
+ACQUIRE_TASK_PATTERN = re.compile(r"获客|私信|点赞|评论|触达|关注|线索|客户回复")
+OPS_TASK_PATTERN = re.compile(r"发布|群发|自动回复|回复|发帖")
+
+
+def _infer_task_group(category: Any, task_name: Any) -> str:
+    category_key = str(category or "").strip().upper()
+    if category_key and category_key != "CUSTOM":
+        return CATEGORY_GROUP.get(category_key, "research")
+
+    name = str(task_name or "")
+    if ACQUIRE_TASK_PATTERN.search(name):
+        return "acquire"
+    if OPS_TASK_PATTERN.search(name):
+        return "ops"
+    return CATEGORY_GROUP.get(category_key, "research")
+
+
+def _resolve_window(
+    range_param: str,
+    start: Optional[str],
+    end: Optional[str],
+) -> tuple[datetime, datetime, datetime, datetime, str, str, int]:
+    """Return (cur_start, cur_end, prev_start, prev_end, compare_label, bucket_unit, bucket_count)."""
+    now = datetime.now(CN_TZ)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    if range_param == "today":
+        cur_start = today_start
+        cur_end = now
+        prev_start = today_start - timedelta(days=1)
+        prev_end = today_start
+        return (cur_start, cur_end, prev_start, prev_end, "较昨日", "hour", 24)
+
+    if range_param == "7d":
+        cur_start = today_start - timedelta(days=6)
+        cur_end = now
+        prev_start = cur_start - timedelta(days=7)
+        prev_end = cur_start
+        return (cur_start, cur_end, prev_start, prev_end, "较上周", "day", 7)
+
+    if range_param == "30d":
+        cur_start = today_start - timedelta(days=29)
+        cur_end = now
+        prev_start = cur_start - timedelta(days=30)
+        prev_end = cur_start
+        return (cur_start, cur_end, prev_start, prev_end, "较上月", "day", 30)
+
+    if range_param == "custom":
+        if not start or not end:
+            raise ValueError("custom range requires start and end")
+        cur_start = datetime.fromisoformat(start)
+        cur_end = datetime.fromisoformat(end)
+        if cur_start.tzinfo is None:
+            cur_start = cur_start.replace(tzinfo=CN_TZ)
+        if cur_end.tzinfo is None:
+            cur_end = cur_end.replace(tzinfo=CN_TZ)
+        length = cur_end - cur_start
+        prev_end = cur_start
+        prev_start = cur_start - length
+        days = max(1, length.days or 1)
+        return (cur_start, cur_end, prev_start, prev_end, "较前期", "day", days)
+
+    raise ValueError(f"unknown range: {range_param}")
+
+
+def _bucket_label(dt: datetime, unit: str) -> str:
+    if unit == "hour":
+        return f"{dt.hour:02d}:00"
+    return f"{dt.month:02d}/{dt.day:02d}"
+
+
+async def _resolve_async_value(value: Any) -> Any:
+    if hasattr(value, "__await__"):
+        return await value
+    return value
+
+
+async def _fetch_metric_buckets(
+    pool: Pool,
+    tenant_id: int,
+    cur_start: datetime,
+    cur_end: datetime,
+    unit: str,
+) -> list[dict[str, Any]]:
+    """返回每个时间桶的聚合：comments/likes/saves/dms/reach + executions/successes/credits."""
+    if unit == "hour":
+        trunc = "hour"
+        step = "1 hour"
+    else:
+        trunc = "day"
+        step = "1 day"
+
+    rows = await pool.fetch(
+        f"""
+        WITH series AS (
+            SELECT generate_series(
+                DATE_TRUNC('{trunc}', $2::timestamptz AT TIME ZONE 'Asia/Shanghai'),
+                DATE_TRUNC('{trunc}', $3::timestamptz AT TIME ZONE 'Asia/Shanghai'),
+                INTERVAL '{step}'
+            ) AS bucket
+        ),
+        agg AS (
+            SELECT
+                DATE_TRUNC('{trunc}', COALESCE(te.finished_at, te.started_at) AT TIME ZONE 'Asia/Shanghai') AS bucket,
+                COUNT(*)::bigint AS executions,
+                COUNT(*) FILTER (WHERE te.execution_result = 'SUCCEED')::bigint AS successes,
+                COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
+                COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
+                COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
+                COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
+                COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
+            FROM task_execution te
+            LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
+            JOIN users u ON u.id = te.user_id
+            WHERE u.tenant_id = $1
+              AND COALESCE(te.finished_at, te.started_at) BETWEEN $2 AND $3
+              AND NOT te.is_deleted
+              AND NOT u.is_deleted
+            GROUP BY bucket
+        )
+        SELECT s.bucket,
+               COALESCE(a.executions, 0)::bigint AS executions,
+               COALESCE(a.successes, 0)::bigint AS successes,
+               COALESCE(a.comments, 0)::bigint AS comments,
+               COALESCE(a.likes, 0)::bigint AS likes,
+               COALESCE(a.saves, 0)::bigint AS saves,
+               COALESCE(a.dms, 0)::bigint AS dms,
+               COALESCE(a.reach, 0)::bigint AS reach
+        FROM series s
+        LEFT JOIN agg a ON a.bucket = s.bucket
+        ORDER BY s.bucket
+        """,
+        tenant_id,
+        cur_start,
+        cur_end,
+    )
+    return [dict(r) for r in rows]
+
+
+async def _fetch_period_totals(
+    pool: Pool,
+    tenant_id: int,
+    start: datetime,
+    end: datetime,
+) -> dict[str, int]:
+    """单段窗口总和（用于环比 prev 段）。"""
+    row = await pool.fetchrow(
+        """
+        SELECT
+            COUNT(*)::bigint AS executions,
+            COUNT(*) FILTER (WHERE te.execution_result = 'SUCCEED')::bigint AS successes,
+            COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
+            COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
+            COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
+            COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
+            COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
+        FROM task_execution te
+        LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
+        JOIN users u ON u.id = te.user_id
+        WHERE u.tenant_id = $1
+          AND COALESCE(te.finished_at, te.started_at) BETWEEN $2 AND $3
+          AND NOT te.is_deleted
+          AND NOT u.is_deleted
+        """,
+        tenant_id,
+        start,
+        end,
+    )
+    return dict(row) if row else {
+        "executions": 0, "successes": 0,
+        "comments": 0, "likes": 0, "saves": 0, "dms": 0, "reach": 0,
+    }
+
+
+async def _fetch_period_credits(
+    pool: Pool,
+    tenant_id: int,
+    start: datetime,
+    end: datetime,
+) -> int:
+    val = await pool.fetchval(
+        """
+        SELECT COALESCE(SUM(ABS(cf.change_amount)), 0)::bigint
+        FROM credit_flow cf
+        JOIN users u ON u.id = cf.user_id
+        WHERE u.tenant_id = $1
+          AND cf.change_type = 'CONSUME'
+          AND cf.created_at BETWEEN $2 AND $3
+          AND NOT u.is_deleted
+        """,
+        tenant_id,
+        start,
+        end,
+    )
+    return int(val or 0)
+
+
+def _series_stats(values: list[int]) -> dict[str, int]:
+    if not values:
+        return {"avg": 0, "peak": 0}
+    total = sum(values)
+    avg = round(total / len(values))
+    peak = max(values)
+    return {"avg": avg, "peak": peak}
+
+
+def _change_pct(cur: int, prev: int) -> int:
+    if prev <= 0:
+        return 0
+    return round((cur - prev) / prev * 100)
+
+
+# ────────────────────────────────────────────────────────────────
+# 1. /api/dashboard/highlights
+# ────────────────────────────────────────────────────────────────
+
+CARD_DEFS = [
+    {"key": "successCount", "label": "完成数", "unit": ""},
+    {"key": "comments", "label": "评论数", "unit": ""},
+    {"key": "likes", "label": "点赞数", "unit": ""},
+    {"key": "saves", "label": "收藏数", "unit": ""},
+    {"key": "dms", "label": "私信数", "unit": ""},
+    {"key": "reach", "label": "触达量", "unit": ""},
+]
+
+
+async def aggregate_highlights(
+    pool: Pool,
+    tenant_id: int,
+    range_param: str,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    _window: Optional[tuple[datetime, datetime, datetime, datetime, str, str, int]] = None,
+    _prev_totals: Any = None,
+) -> dict[str, Any]:
+    cur_start, cur_end, prev_start, prev_end, compare_label, unit, _ = _window or _resolve_window(range_param, start, end)
+
+    bucket_rows, prev_totals = await asyncio.gather(
+        _fetch_metric_buckets(pool, tenant_id, cur_start, cur_end, unit),
+        _resolve_async_value(
+            _prev_totals
+            if _prev_totals is not None
+            else _fetch_period_totals(pool, tenant_id, prev_start, prev_end)
+        ),
+    )
+
+    labels = [_bucket_label(r["bucket"], unit) for r in bucket_rows]
+    bucket_key_map = {"successCount": "successes"}
+
+    cards = []
+    for d in CARD_DEFS:
+        key = d["key"]
+        bucket_key = bucket_key_map.get(key, key)
+        values = [int(r[bucket_key]) for r in bucket_rows]
+        cur_total = sum(values)
+        prev_val = int(prev_totals.get(bucket_key, 0))
+        cards.append({
+            "key": key,
+            "label": d["label"],
+            "value": cur_total,
+            "prev": prev_val,
+            "change_pct": _change_pct(cur_total, prev_val),
+            "unit": d["unit"],
+            "series": {"labels": labels, "values": values},
+            "stats": _series_stats(values),
+        })
+
+    return {
+        "range": range_param,
+        "compare_label": compare_label,
+        "cards": cards,
+    }
+
+
+# ────────────────────────────────────────────────────────────────
+# 2. /api/dashboard/achievements
+# ────────────────────────────────────────────────────────────────
+
+ACHIEVEMENT_METRICS = ["comments", "likes", "saves", "dms", "reach"]
+ACHIEVEMENT_SOURCE_KEYS = {
+    "comments": "comments",
+    "likes": "likes",
+    "saves": "saves",
+    "dms": "dms",
+    "reach": "reach",
+    "successCount": "successes",
+}
+
+
+async def aggregate_achievements(
+    pool: Pool,
+    tenant_id: int,
+    range_param: str,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    _window: Optional[tuple[datetime, datetime, datetime, datetime, str, str, int]] = None,
+    _cur_totals: Any = None,
+    _prev_totals: Any = None,
+) -> dict[str, Any]:
+    cur_start, cur_end, prev_start, prev_end, compare_label, unit, _ = _window or _resolve_window(range_param, start, end)
+
+    bucket_rows, prev_totals = await asyncio.gather(
+        _fetch_metric_buckets(pool, tenant_id, cur_start, cur_end, unit),
+        _resolve_async_value(
+            _prev_totals
+            if _prev_totals is not None
+            else _fetch_period_totals(pool, tenant_id, prev_start, prev_end)
+        ),
+    )
+    cur_totals = {
+        source_key: sum(int(r[source_key]) for r in bucket_rows)
+        for source_key in set(ACHIEVEMENT_SOURCE_KEYS.values())
+    }
+
+    achievements: list[dict[str, Any]] = []
+
+    def _maybe(metric, cur_val, prev_val):
+        return generate_achievement(metric, cur_val, prev_val, compare_label)
+
+    def _achievement_sort_key(item: dict[str, Any]) -> int:
+        cur_val = int(item.get("current", 0) or 0)
+        prev_val = int(item.get("prev", 0) or 0)
+        if prev_val == 0 and cur_val > 0:
+            return sys.maxsize + cur_val
+        return int(item.get("change_pct", 0) or 0)
+
+    for metric in ACHIEVEMENT_METRICS:
+        source_key = ACHIEVEMENT_SOURCE_KEYS[metric]
+        item = _maybe(metric, int(cur_totals.get(source_key, 0)), int(prev_totals.get(source_key, 0)))
+        if item:
+            achievements.append(item)
+
+    success_key = ACHIEVEMENT_SOURCE_KEYS["successCount"]
+    item = _maybe("successCount", int(cur_totals.get(success_key, 0)), int(prev_totals.get(success_key, 0)))
+    if item:
+        achievements.append(item)
+
+    # 按 change_pct 降序，最多 5 个
+    achievements.sort(key=_achievement_sort_key, reverse=True)
+    return {
+        "range": range_param,
+        "compare_label": compare_label,
+        "achievements": achievements[:5],
+    }
+
+
+# ────────────────────────────────────────────────────────────────
+# 3. /api/dashboard/aggregations
+# ────────────────────────────────────────────────────────────────
+
+async def aggregate_aggregations(
+    pool: Pool,
+    tenant_id: int,
+    range_param: str,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    _window: Optional[tuple[datetime, datetime, datetime, datetime, str, str, int]] = None,
+) -> dict[str, Any]:
+    cur_start, cur_end, _, _, _, _, _ = _window or _resolve_window(range_param, start, end)
+
+    account_rows, credit_rows, skill_rows, skill_credit_rows, device_rows, device_credit_rows, heat_rows = await asyncio.gather(
+        pool.fetch(
+            """
+            SELECT u.id AS user_id,
+                   u.name AS username,
+                   u.role,
+                   MAX(te.device_id) AS device_id,
+                   COUNT(te.id)::bigint AS exec_count,
+                   COUNT(te.id) FILTER (WHERE te.execution_result = 'SUCCEED')::bigint AS success_count,
+                   COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float AS duration_sec,
+                   COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
+                   COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
+                   COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
+                   COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
+                   COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
+            FROM users u
+            LEFT JOIN task_execution te ON te.user_id = u.id
+                AND COALESCE(te.finished_at, te.started_at) BETWEEN $2 AND $3
+                AND NOT te.is_deleted
+            LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
+            WHERE u.tenant_id = $1 AND NOT u.is_deleted
+            GROUP BY u.id, u.name, u.role
+            ORDER BY exec_count DESC
+            """,
+            tenant_id, cur_start, cur_end,
+        ),
+        pool.fetch(
+            """
+            SELECT cf.user_id, COALESCE(SUM(ABS(cf.change_amount)), 0)::bigint AS credits
+            FROM credit_flow cf
+            JOIN users u ON u.id = cf.user_id
+            WHERE u.tenant_id = $1 AND cf.change_type = 'CONSUME'
+              AND cf.created_at BETWEEN $2 AND $3
+              AND NOT u.is_deleted
+            GROUP BY cf.user_id
+            """,
+            tenant_id, cur_start, cur_end,
+        ),
+        pool.fetch(
+            """
+            SELECT ut.id AS skill_id,
+                   ut.task_name AS skill_name,
+                   ut.category,
+                   ut.related_platforms,
+                   ut.task_description AS description,
+                   COUNT(te.id)::bigint AS exec_count,
+                   COUNT(te.id) FILTER (WHERE te.execution_result = 'SUCCEED')::bigint AS success_count,
+                   COUNT(te.id) FILTER (WHERE te.execution_result = 'FAILED')::bigint AS fail_count,
+                   COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float AS duration_sec,
+                   COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
+                   COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
+                   COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
+                   COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
+                   COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
+            FROM user_task ut
+            LEFT JOIN task_execution te ON te.task_id = ut.id
+                AND COALESCE(te.finished_at, te.started_at) BETWEEN $2 AND $3
+                AND NOT te.is_deleted
+            LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
+            JOIN users u ON u.id = ut.user_id
+            WHERE u.tenant_id = $1 AND NOT ut.is_deleted AND NOT u.is_deleted
+            GROUP BY ut.id, ut.task_name, ut.category, ut.related_platforms, ut.task_description
+            HAVING COUNT(te.id) > 0
+            ORDER BY exec_count DESC
+            """,
+            tenant_id, cur_start, cur_end,
+        ),
+        pool.fetch(
+            """
+            SELECT te.task_id AS skill_id,
+                   COALESCE(SUM(ABS(cf.change_amount)) FILTER (WHERE cf.change_type = 'CONSUME'), 0)::bigint AS total_credits
+            FROM task_execution te
+            JOIN users u ON u.id = te.user_id
+            LEFT JOIN usage_record ur ON ur.task_id = te.id::varchar
+            LEFT JOIN credit_flow cf ON cf.ref_type = 'usage'
+                                     AND cf.ref_id ~ '^[0-9]+$'
+                                     AND CASE WHEN cf.ref_id ~ '^[0-9]+$' THEN cf.ref_id::int END = ur.id
+            WHERE u.tenant_id = $1
+              AND te.task_id IS NOT NULL
+              AND COALESCE(te.finished_at, te.started_at) BETWEEN $2 AND $3
+              AND NOT te.is_deleted
+              AND NOT u.is_deleted
+            GROUP BY te.task_id
+            """,
+            tenant_id, cur_start, cur_end,
+        ),
+        pool.fetch(
+            """
+            SELECT te.device_id,
+                   COUNT(*)::bigint AS exec_count,
+                   COUNT(*) FILTER (WHERE te.execution_result = 'SUCCEED')::bigint AS success_count,
+                   COUNT(*) FILTER (WHERE te.execution_result = 'FAILED')::bigint AS fail_count,
+                   COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float AS duration_sec,
+                   COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
+                   COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
+                   COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
+                   COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
+                   COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
+            FROM task_execution te
+            LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
+            JOIN users u ON u.id = te.user_id
+            WHERE u.tenant_id = $1
+              AND te.device_id IS NOT NULL
+              AND COALESCE(te.finished_at, te.started_at) BETWEEN $2 AND $3
+              AND NOT te.is_deleted AND NOT u.is_deleted
+            GROUP BY te.device_id
+            ORDER BY exec_count DESC
+            """,
+            tenant_id, cur_start, cur_end,
+        ),
+        pool.fetch(
+            """
+            SELECT te.device_id,
+                   COALESCE(SUM(ABS(cf.change_amount)) FILTER (WHERE cf.change_type = 'CONSUME'), 0)::bigint AS total_credits
+            FROM task_execution te
+            JOIN users u ON u.id = te.user_id
+            LEFT JOIN usage_record ur ON ur.task_id = te.id::varchar
+            LEFT JOIN credit_flow cf ON cf.ref_type = 'usage'
+                                     AND cf.ref_id ~ '^[0-9]+$'
+                                     AND CASE WHEN cf.ref_id ~ '^[0-9]+$' THEN cf.ref_id::int END = ur.id
+            WHERE u.tenant_id = $1
+              AND te.device_id IS NOT NULL
+              AND COALESCE(te.finished_at, te.started_at) BETWEEN $2 AND $3
+              AND NOT te.is_deleted
+              AND NOT u.is_deleted
+            GROUP BY te.device_id
+            """,
+            tenant_id, cur_start, cur_end,
+        ),
+        pool.fetch(
+            """
+            SELECT te.device_id,
+                   COALESCE(ebs.platform::text, 'OTHER') AS platform,
+                   COUNT(*)::bigint AS exec_count,
+                   COUNT(*) FILTER (WHERE te.execution_result = 'FAILED')::bigint AS fail_count
+            FROM task_execution te
+            LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
+            JOIN users u ON u.id = te.user_id
+            WHERE u.tenant_id = $1
+              AND te.device_id IS NOT NULL
+              AND COALESCE(te.finished_at, te.started_at) BETWEEN $2 AND $3
+              AND NOT te.is_deleted AND NOT u.is_deleted
+            GROUP BY te.device_id, ebs.platform
+            """,
+            tenant_id, cur_start, cur_end,
+        ),
+    )
+    credits_by_user = {r["user_id"]: int(r["credits"]) for r in credit_rows}
+    skill_credits_by_id = {r["skill_id"]: int(r["total_credits"]) for r in skill_credit_rows}
+    device_credits_by_id = {r["device_id"]: int(r["total_credits"]) for r in device_credit_rows}
+
+    accounts = []
+    for r in account_rows:
+        accounts.append({
+            "id": r["user_id"],
+            "user_id": r["user_id"],
+            "username": r["username"] or f"user-{r['user_id']}",
+            "role": r["role"],
+            "device_id": r["device_id"],
+            "token_used": credits_by_user.get(r["user_id"], 0),
+            "success_count": int(r["success_count"]),
+            "exec_count": int(r["exec_count"]),
+            "duration_sec": int(r["duration_sec"]),
+            "comments": int(r["comments"]),
+            "likes": int(r["likes"]),
+            "saves": int(r["saves"]),
+            "dms": int(r["dms"]),
+            "reach": int(r["reach"]),
+        })
+
+    account_totals = {
+        "accounts": len([a for a in accounts if a["exec_count"] > 0]),
+        "reach": sum(a["reach"] for a in accounts),
+        "dms": sum(a["dms"] for a in accounts),
+        "comments": sum(a["comments"] for a in accounts),
+        "credits": sum(a["token_used"] for a in accounts),
+    }
+
+    # 按 category 分组
+    groups: dict[str, dict[str, Any]] = {}
+    for k, meta in CATEGORY_META.items():
+        groups[k] = {
+            "key": k,
+            "label": meta["label"],
+            "emoji": meta["emoji"],
+            "color": meta["color"],
+            "skills": [],
+            "totals": {"exec": 0, "success": 0, "comments": 0, "likes": 0, "saves": 0, "dms": 0, "reach": 0, "total_credits": 0},
+        }
+
+    for r in skill_rows:
+        group_key = CATEGORY_GROUP.get(r["category"] or "", "research")
+        skill_item = {
+            "skill_id": f"S{r['skill_id']}",
+            "skill_name": r["skill_name"],
+            "description": r["description"] or "",
+            "category": r["category"],
+            "exec": int(r["exec_count"]),
+            "success": int(r["success_count"]),
+            "fail": int(r["fail_count"]),
+            "duration_sec": int(r["duration_sec"]),
+            "comments": int(r["comments"]),
+            "likes": int(r["likes"]),
+            "saves": int(r["saves"]),
+            "dms": int(r["dms"]),
+            "reach": int(r["reach"]),
+            "total_credits": skill_credits_by_id.get(r["skill_id"], 0),
+        }
+        g = groups[group_key]
+        g["skills"].append(skill_item)
+        g["totals"]["exec"] += skill_item["exec"]
+        g["totals"]["success"] += skill_item["success"]
+        g["totals"]["comments"] += skill_item["comments"]
+        g["totals"]["likes"] += skill_item["likes"]
+        g["totals"]["saves"] += skill_item["saves"]
+        g["totals"]["dms"] += skill_item["dms"]
+        g["totals"]["reach"] += skill_item["reach"]
+        g["totals"]["total_credits"] += skill_item["total_credits"]
+
+    skill_groups = [g for g in groups.values() if g["skills"]]
+
+    devices = []
+    alert_count = 0
+    for r in device_rows:
+        exec_count = int(r["exec_count"])
+        fail_count = int(r["fail_count"])
+        fail_rate = (fail_count / exec_count) if exec_count else 0
+        if fail_rate > 0.4:
+            status = "critical"
+        elif fail_rate > 0.2:
+            status = "warning"
+        else:
+            status = "healthy"
+        if status != "healthy":
+            alert_count += 1
+        devices.append({
+            "id": r["device_id"],
+            "exec_count": exec_count,
+            "success_count": int(r["success_count"]),
+            "fail_count": fail_count,
+            "fail_rate": round(fail_rate * 100),
+            "duration_sec": int(r["duration_sec"]),
+            "token_usage": 0,  # 算力豆按 user 算，device 维度暂不归属
+            "comments": int(r["comments"]),
+            "likes": int(r["likes"]),
+            "saves": int(r["saves"]),
+            "dms": int(r["dms"]),
+            "reach": int(r["reach"]),
+            "total_credits": device_credits_by_id.get(r["device_id"], 0),
+            "status": status,
+        })
+
+    heat_map: dict[str, dict[str, dict[str, int]]] = {}
+    for r in heat_rows:
+        dev = r["device_id"]
+        plat_key = (r["platform"] or "OTHER").lower()
+        cells = heat_map.setdefault(dev, {})
+        cells[plat_key] = {
+            "exec": int(r["exec_count"]),
+            "fail": int(r["fail_count"]),
+        }
+    device_heat = [{"id": dev, "cells": cells} for dev, cells in heat_map.items()]
+
+    return {
+        "accounts": accounts,
+        "account_totals": account_totals,
+        "skill_groups": skill_groups,
+        "devices": devices,
+        "device_heat": device_heat,
+        "device_alert_count": alert_count,
+    }
+
+
+# ────────────────────────────────────────────────────────────────
+# 4. /api/dashboard/charts
+# ────────────────────────────────────────────────────────────────
+
+async def aggregate_charts(
+    pool: Pool,
+    tenant_id: int,
+    range_param: str,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    _window: Optional[tuple[datetime, datetime, datetime, datetime, str, str, int]] = None,
+    _cur_totals: Any = None,
+    _cur_credits: Any = None,
+    _prev_totals: Any = None,
+    _prev_credits: Any = None,
+) -> dict[str, Any]:
+    cur_start, cur_end, prev_start, prev_end, _, _, _ = _window or _resolve_window(range_param, start, end)
+
+    duration_sql = """
+        SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float AS duration_sec
+        FROM task_execution te
+        JOIN users u ON u.id = te.user_id
+        WHERE u.tenant_id = $1
+          AND te.execution_result = 'SUCCEED'
+          AND COALESCE(te.finished_at, te.started_at) BETWEEN $2 AND $3
+          AND NOT te.is_deleted AND NOT u.is_deleted
+    """
+
+    platform_rows, cur_totals, cur_credits, duration_row, prev_totals, prev_credits, prev_duration_row = await asyncio.gather(
+        pool.fetch(
+            """
+            SELECT COALESCE(ebs.platform::text, 'OTHER') AS platform,
+                   COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
+            FROM task_execution te
+            LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
+            JOIN users u ON u.id = te.user_id
+            WHERE u.tenant_id = $1
+              AND COALESCE(te.finished_at, te.started_at) BETWEEN $2 AND $3
+              AND NOT te.is_deleted AND NOT u.is_deleted
+            GROUP BY ebs.platform
+            HAVING COALESCE(SUM(ebs.unique_reach), 0) > 0
+            ORDER BY reach DESC
+            """,
+            tenant_id, cur_start, cur_end,
+        ),
+        _resolve_async_value(
+            _cur_totals
+            if _cur_totals is not None
+            else _fetch_period_totals(pool, tenant_id, cur_start, cur_end)
+        ),
+        _resolve_async_value(
+            _cur_credits
+            if _cur_credits is not None
+            else _fetch_period_credits(pool, tenant_id, cur_start, cur_end)
+        ),
+        pool.fetchrow(duration_sql, tenant_id, cur_start, cur_end),
+        _resolve_async_value(
+            _prev_totals
+            if _prev_totals is not None
+            else _fetch_period_totals(pool, tenant_id, prev_start, prev_end)
+        ),
+        _resolve_async_value(
+            _prev_credits
+            if _prev_credits is not None
+            else _fetch_period_credits(pool, tenant_id, prev_start, prev_end)
+        ),
+        pool.fetchrow(duration_sql, tenant_id, prev_start, prev_end),
+    )
+    platform_breakdown = []
+    for r in platform_rows:
+        meta = PLATFORM_META.get(r["platform"], {"name": r["platform"] or "其他", "color": "#999999"})
+        platform_breakdown.append({
+            "key": (r["platform"] or "OTHER").lower(),
+            "name": meta["name"],
+            "value": int(r["reach"]),
+            "color": meta["color"],
+        })
+
+    interaction_breakdown = [
+        {"key": k, "name": label, "value": int(cur_totals.get(k, 0)), "color": color}
+        for (k, label, color) in INTERACTION_META
+    ]
+
+    # mini stats
+    runtime_sec = float((duration_row["duration_sec"] or 0))
+    runtime_prev_sec = float((prev_duration_row["duration_sec"] or 0))
+    runtime_h = round(runtime_sec / 3600, 1)
+    total_exec = int(cur_totals.get("executions", 0))
+    success_exec = int(cur_totals.get("successes", 0))
+    rate_pct = round(success_exec / total_exec * 100) if total_exec else 0
+
+    prev_runtime_h = round(runtime_prev_sec / 3600, 1)
+    prev_exec = int(prev_totals.get("executions", 0))
+
+    mini_stats = {
+        "exec": str(total_exec),
+        "exec_raw": total_exec,
+        "exec_prev": prev_exec,
+        "rate": f"{rate_pct}%",
+        "runtime": f"{runtime_h}h",
+        "runtime_raw": runtime_h,
+        "runtime_prev": prev_runtime_h,
+        "runtime_sec": runtime_sec,
+        "runtime_prev_sec": runtime_prev_sec,
+        "cost": f"{cur_credits:,}",
+        "cost_raw": cur_credits,
+        "cost_prev": prev_credits,
+    }
+
+    # ROI 公式: value = comments*1.3 + dms*1.3 + likes*0.4 + saves*0.4
+    comments = int(cur_totals.get("comments", 0))
+    likes = int(cur_totals.get("likes", 0))
+    saves = int(cur_totals.get("saves", 0))
+    dms = int(cur_totals.get("dms", 0))
+    value_total = round(comments * 1.3 + dms * 1.3 + likes * 0.4 + saves * 0.4)
+    cost_total = round(cur_credits * 0.3)
+    roi_val = round(value_total / cost_total, 1) if cost_total else 0
+    saved = max(value_total - cost_total, 0)
+    saved_pct = round(saved / value_total * 100) if value_total else 0
+
+    breakdown = [
+        {"label": "评论", "count": comments, "unit_price": 1.3, "subtotal": round(comments * 1.3)},
+        {"label": "私信", "count": dms, "unit_price": 1.3, "subtotal": round(dms * 1.3)},
+        {"label": "点赞", "count": likes, "unit_price": 0.4, "subtotal": round(likes * 0.4)},
+        {"label": "收藏", "count": saves, "unit_price": 0.4, "subtotal": round(saves * 0.4)},
+    ]
+
+    # ROI by platform: 用 platform_breakdown 按比例分摊
+    total_reach = sum(p["value"] for p in platform_breakdown) or 1
+    roi_platforms = []
+    for p in platform_breakdown:
+        share = p["value"] / total_reach
+        p_value = round(value_total * share)
+        p_cost = round(cost_total * share)
+        p_roi = round(p_value / p_cost, 1) if p_cost else 0
+        roi_platforms.append({"name": p["name"], "value": p_value, "cost": p_cost, "roi": p_roi})
+
+    roi = {
+        "value": value_total,
+        "cost": cost_total,
+        "roi": roi_val,
+        "saved": saved,
+        "saved_pct": saved_pct,
+        "breakdown": breakdown,
+        "platforms": roi_platforms,
+    }
+
+    return {
+        "platform_breakdown": platform_breakdown,
+        "interaction_breakdown": interaction_breakdown,
+        "mini_stats": mini_stats,
+        "roi": roi,
+    }
+
+
+# ────────────────────────────────────────────────────────────────
+# 5. /api/dashboard/snapshot - 一次拉取首屏全部数据
+# ────────────────────────────────────────────────────────────────
+
+async def aggregate_snapshot(
+    pool: Pool,
+    tenant_id: int,
+    range_param: str,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> dict[str, Any]:
+    window = _resolve_window(range_param, start, end)
+    cur_start, cur_end, prev_start, prev_end, _, _, _ = window
+    cur_totals_task = asyncio.create_task(_fetch_period_totals(pool, tenant_id, cur_start, cur_end))
+    prev_totals_task = asyncio.create_task(_fetch_period_totals(pool, tenant_id, prev_start, prev_end))
+    cur_credits_task = asyncio.create_task(_fetch_period_credits(pool, tenant_id, cur_start, cur_end))
+    prev_credits_task = asyncio.create_task(_fetch_period_credits(pool, tenant_id, prev_start, prev_end))
+
+    highlights, achievements, aggs, charts = await asyncio.gather(
+        aggregate_highlights(pool, tenant_id, range_param, start, end, _window=window, _prev_totals=prev_totals_task),
+        aggregate_achievements(
+            pool,
+            tenant_id,
+            range_param,
+            start,
+            end,
+            _window=window,
+            _cur_totals=cur_totals_task,
+            _prev_totals=prev_totals_task,
+        ),
+        aggregate_aggregations(pool, tenant_id, range_param, start, end, _window=window),
+        aggregate_charts(
+            pool,
+            tenant_id,
+            range_param,
+            start,
+            end,
+            _window=window,
+            _cur_totals=cur_totals_task,
+            _cur_credits=cur_credits_task,
+            _prev_totals=prev_totals_task,
+            _prev_credits=prev_credits_task,
+        ),
+    )
+    return {
+        "range": range_param,
+        "highlights": highlights,
+        "achievements": achievements,
+        "aggs": aggs,
+        "charts": charts,
+    }
 
 
 WHITELIST = {
@@ -19,6 +928,7 @@ WHITELIST = {
     "enterprise_recharge_record",
     "executor_behavior_log",
     "recharge_order",
+    "execution_behavior_stat",
 }
 
 
@@ -59,7 +969,7 @@ async def explore_tables(pool: Pool) -> dict[str, list[dict[str, Any]]]:
     return {"tables": tables}
 
 
-async def sample_table(pool: Pool, table_name: str, limit: int) -> list[dict[str, Any]]:
+async def sample_table(pool: Pool, table_name: str, limit: int, tenant_id: int) -> list[dict[str, Any]]:
     if table_name not in WHITELIST:
         raise ValueError(f"Table '{table_name}' is not allowed")
 
@@ -76,10 +986,13 @@ async def sample_table(pool: Pool, table_name: str, limit: int) -> list[dict[str
     )
     json_columns = {row["column_name"] for row in json_column_rows}
 
-    rows = await pool.fetch(
-        f'SELECT * FROM "{table_name}" LIMIT $1',
-        limit,
-    )
+    query = f'SELECT * FROM "{table_name}"'
+    if table_name in TENANT_SCOPED_TABLES:
+        query += " WHERE tenant_id = $1 LIMIT $2"
+        rows = await pool.fetch(query, tenant_id, limit)
+    else:
+        query += " LIMIT $1"
+        rows = await pool.fetch(query, limit)
 
     sampled_rows: list[dict[str, Any]] = []
     for row in rows:
@@ -103,7 +1016,8 @@ async def stats_overview(pool: Pool, days: int, tenant_id: int) -> dict[str, Any
             COUNT(*)::bigint AS total_executions,
             COUNT(*) FILTER (WHERE te.execution_result = 'SUCCEED')::bigint AS success_count,
             COUNT(*) FILTER (WHERE te.execution_result = 'FAILED')::bigint AS fail_count,
-            COUNT(DISTINCT te.user_id)::bigint AS active_users
+            COUNT(DISTINCT te.user_id)::bigint AS active_users,
+            COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at)))/3600, 0)::float AS total_duration_hours
         FROM task_execution te
         JOIN users u ON u.id = te.user_id
         WHERE te.started_at > NOW() - INTERVAL '{interval_literal}'
@@ -131,35 +1045,119 @@ async def stats_overview(pool: Pool, days: int, tenant_id: int) -> dict[str, Any
         "fail_count": execution_row["fail_count"],
         "total_credits_consumed": float(credit_row["total_credits_consumed"]),
         "active_users": execution_row["active_users"],
+        "total_duration_hours": float(execution_row["total_duration_hours"]),
     }
 
 
 async def stats_trend(pool: Pool, days: int, tenant_id: int) -> dict[str, list[Any]]:
-    interval_literal = f"{days} days"
-
-    rows = await pool.fetch(
-        f"""
-        SELECT
-            DATE(te.started_at) AS day,
-            COUNT(*) FILTER (WHERE te.execution_result = 'SUCCEED')::bigint AS success,
-            COUNT(*) FILTER (WHERE te.execution_result = 'FAILED')::bigint AS failed,
-            COUNT(*)::bigint AS total
-        FROM task_execution te
-        JOIN users u ON u.id = te.user_id
-        WHERE te.started_at > NOW() - INTERVAL '{interval_literal}'
-          AND u.tenant_id = $1
-          AND NOT u.is_deleted
-        GROUP BY DATE(te.started_at)
-        ORDER BY day
-        """,
-        tenant_id,
-    )
+    if days == 1:
+        rows = await pool.fetch(
+            """
+            WITH hours AS (
+                SELECT generate_series(
+                    DATE_TRUNC('day', NOW()),
+                    DATE_TRUNC('day', NOW()) + INTERVAL '23 hours',
+                    INTERVAL '1 hour'
+                ) AS day_hour
+            ),
+            te_agg AS (
+                SELECT
+                    DATE_TRUNC('hour', te.started_at) AS day_hour,
+                    COALESCE(SUM(CASE WHEN te.execution_result = 'SUCCEED' THEN 1 ELSE 0 END), 0)::bigint AS success,
+                    COALESCE(SUM(CASE WHEN te.execution_result = 'FAILED' THEN 1 ELSE 0 END), 0)::bigint AS failed,
+                    COUNT(*)::bigint AS total,
+                    COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
+                    COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
+                    COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
+                    COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach,
+                    COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float / 3600.0 AS runtime_h
+                FROM task_execution te
+                LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
+                JOIN users u ON u.id = te.user_id
+                WHERE te.started_at >= DATE_TRUNC('day', NOW())
+                  AND u.tenant_id = $1
+                  AND NOT te.is_deleted AND NOT u.is_deleted
+                GROUP BY DATE_TRUNC('hour', te.started_at)
+            )
+            SELECT
+                hours.day_hour AS day_hour,
+                COALESCE(te_agg.success, 0) AS success,
+                COALESCE(te_agg.failed, 0) AS failed,
+                COALESCE(te_agg.total, 0) AS total,
+                COALESCE(te_agg.comments, 0) AS comments,
+                COALESCE(te_agg.likes, 0) AS likes,
+                COALESCE(te_agg.dms, 0) AS dms,
+                COALESCE(te_agg.reach, 0) AS reach,
+                COALESCE(te_agg.runtime_h, 0) AS runtime_h
+            FROM hours
+            LEFT JOIN te_agg USING (day_hour)
+            ORDER BY hours.day_hour
+            """,
+            tenant_id,
+        )
+        dates = [
+            (row["day_hour"].astimezone(CN_TZ) if row["day_hour"].tzinfo else row["day_hour"]).strftime("%Y-%m-%dT%H:%M:%S")
+            for row in rows
+        ]
+    else:
+        rows = await pool.fetch(
+            """
+            WITH dates AS (
+                SELECT generate_series(
+                    (NOW()::date - ($2::int - 1)),
+                    NOW()::date,
+                    INTERVAL '1 day'
+                )::date AS day
+            ),
+            te_agg AS (
+                SELECT
+                    DATE(te.started_at) AS day,
+                    COALESCE(SUM(CASE WHEN te.execution_result = 'SUCCEED' THEN 1 ELSE 0 END), 0)::bigint AS success,
+                    COALESCE(SUM(CASE WHEN te.execution_result = 'FAILED' THEN 1 ELSE 0 END), 0)::bigint AS failed,
+                    COUNT(*)::bigint AS total,
+                    COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
+                    COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
+                    COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
+                    COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach,
+                    COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float / 3600.0 AS runtime_h
+                FROM task_execution te
+                LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
+                JOIN users u ON u.id = te.user_id
+                WHERE te.started_at >= (NOW()::date - ($2::int - 1))
+                  AND te.started_at < (NOW()::date + INTERVAL '1 day')
+                  AND u.tenant_id = $1
+                  AND NOT te.is_deleted AND NOT u.is_deleted
+                GROUP BY DATE(te.started_at)
+            )
+            SELECT
+                dates.day AS day,
+                COALESCE(te_agg.success, 0) AS success,
+                COALESCE(te_agg.failed, 0) AS failed,
+                COALESCE(te_agg.total, 0) AS total,
+                COALESCE(te_agg.comments, 0) AS comments,
+                COALESCE(te_agg.likes, 0) AS likes,
+                COALESCE(te_agg.dms, 0) AS dms,
+                COALESCE(te_agg.reach, 0) AS reach,
+                COALESCE(te_agg.runtime_h, 0) AS runtime_h
+            FROM dates
+            LEFT JOIN te_agg USING (day)
+            ORDER BY dates.day
+            """,
+            tenant_id,
+            days,
+        )
+        dates = [row["day"].isoformat() for row in rows]
 
     return {
-        "dates": [row["day"].isoformat() for row in rows],
+        "dates": dates,
         "success": [row["success"] for row in rows],
         "failed": [row["failed"] for row in rows],
         "total": [row["total"] for row in rows],
+        "comments": [row["comments"] for row in rows],
+        "likes": [row["likes"] for row in rows],
+        "dms": [row["dms"] for row in rows],
+        "reach": [row["reach"] for row in rows],
+        "runtime": [round(float(row["runtime_h"] or 0), 1) for row in rows],
     }
 
 
@@ -232,7 +1230,17 @@ async def stats_tasks(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
         tenant_id,
     )
 
-    return [dict(row) for row in rows]
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        raw_task_name = item.get("task_name")
+        group_key = _infer_task_group(item.get("category"), raw_task_name)
+        item["task_detail_name"] = raw_task_name
+        item["task_group"] = group_key
+        item["task_name"] = TASK_GROUP_LABEL.get(group_key, str(raw_task_name or "未命名任务"))
+        items.append(item)
+
+    return items
 
 
 async def get_members(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
@@ -313,7 +1321,7 @@ async def get_transactions(pool: Pool, page: int, page_size: int, tenant_id: int
 
     union_cte = """
         SELECT
-            'CONSUME'::varchar AS change_type,
+            'CONSUME'::text AS change_type,
             te.id::varchar AS task_exec_id,
             ut.task_name,
             u.name AS username,
@@ -327,7 +1335,7 @@ async def get_transactions(pool: Pool, page: int, page_size: int, tenant_id: int
         LEFT JOIN usage_record ur
             ON cf.ref_type = 'usage'
             AND cf.ref_id ~ '^[0-9]+$'
-            AND cf.ref_id::int = ur.id
+            AND CASE WHEN cf.ref_id ~ '^[0-9]+$' THEN cf.ref_id::int END = ur.id
         LEFT JOIN task_execution te ON ur.task_id = te.id::varchar
         LEFT JOIN user_task ut ON te.task_id = ut.id
         WHERE cf.change_type = 'CONSUME'
@@ -338,7 +1346,7 @@ async def get_transactions(pool: Pool, page: int, page_size: int, tenant_id: int
         UNION ALL
 
         SELECT
-            cf.change_type,
+            cf.change_type::text,
             NULL AS task_exec_id,
             cf.remark AS task_name,
             u.name AS username,
@@ -412,17 +1420,29 @@ async def get_accounts(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
     rows = await pool.fetch(
         """
         SELECT u.id, u.name AS username,
-               COUNT(te.id)::bigint AS exec_count,
-               COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at)))/3600, 0)::float AS duration_hours,
-               COALESCE(SUM(
-                   CASE WHEN te.token_usage IS NOT NULL
-                        THEN ((te.token_usage #>> '{}')::jsonb ->> 'total_tokens')::bigint
-                        ELSE 0 END
-               ), 0)::bigint AS total_tokens
+               COALESCE(es.exec_count, 0)::bigint AS exec_count,
+               COALESCE(es.duration_hours, 0)::float AS duration_hours,
+               COALESCE(cs.total_credits, 0)::float AS total_credits
         FROM users u
-        LEFT JOIN task_execution te ON u.id = te.user_id
+        LEFT JOIN (
+            SELECT te.user_id,
+                   COUNT(*)::bigint AS exec_count,
+                   SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at)))/3600 AS duration_hours
+            FROM task_execution te
+            GROUP BY te.user_id
+        ) es ON u.id = es.user_id
+        LEFT JOIN (
+            SELECT te.user_id,
+                   COALESCE(SUM(ABS(cf.change_amount)), 0) AS total_credits
+            FROM task_execution te
+            LEFT JOIN usage_record ur ON ur.task_id = te.id::varchar
+            LEFT JOIN credit_flow cf ON cf.ref_type = 'usage'
+                                     AND cf.ref_id ~ '^[0-9]+$'
+                                     AND CASE WHEN cf.ref_id ~ '^[0-9]+$' THEN cf.ref_id::int END = ur.id
+                                     AND cf.change_type = 'CONSUME'
+            GROUP BY te.user_id
+        ) cs ON u.id = cs.user_id
         WHERE NOT u.is_deleted AND u.tenant_id = $1
-        GROUP BY u.id, u.name
         ORDER BY exec_count DESC
         """,
         tenant_id,
@@ -436,19 +1456,40 @@ async def get_accounts(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
     return result
 
 
-async def distribute_credits(pool: Pool, operator_id: int, target_user_id: int, amount: int, remark: str) -> None:
+async def get_audit_log(pool: Pool, tenant_id: int, page: int = 1, page_size: int = 20) -> dict[str, Any]:
+    offset = (page - 1) * page_size
+    total = await pool.fetchval(
+        'SELECT COUNT(*) FROM enterprise_audit_log WHERE tenant_id = $1', tenant_id,
+    )
+    rows = await pool.fetch(
+        """SELECT id, operator_id, operator_name, action, target_user_id, target_user_name,
+                  credits_amount, before_snapshot, after_snapshot, remark, created_at
+           FROM enterprise_audit_log WHERE tenant_id = $1
+           ORDER BY created_at DESC LIMIT $2 OFFSET $3""",
+        tenant_id, page_size, offset,
+    )
+    items = []
+    for row in rows:
+        item = dict(row)
+        if item.get("created_at"):
+            item["created_at"] = item["created_at"].isoformat()
+        items.append(item)
+    return {"items": items, "total": total}
+
+
+async def distribute_credits(pool: Pool, operator_id: int, target_user_id: int, amount: int, remark: str, api_tenant_id: int) -> None:
     async with pool.acquire() as conn:
         async with conn.transaction():
             op_user = await conn.fetchrow(
-                'SELECT id, name, tenant_id FROM users WHERE id = $1 AND NOT is_deleted',
-                operator_id,
+                'SELECT id, name, tenant_id, "phoneNumber" FROM users WHERE id = $1 AND tenant_id = $2 AND NOT is_deleted',
+                operator_id, api_tenant_id,
             )
             if not op_user:
                 raise ValueError("operator not found")
 
             tgt_user = await conn.fetchrow(
-                'SELECT id, name, tenant_id FROM users WHERE id = $1 AND NOT is_deleted',
-                target_user_id,
+                'SELECT id, name, tenant_id, "phoneNumber" FROM users WHERE id = $1 AND tenant_id = $2 AND NOT is_deleted',
+                target_user_id, api_tenant_id,
             )
             if not tgt_user:
                 raise ValueError("target user not found")
@@ -476,10 +1517,12 @@ async def distribute_credits(pool: Pool, operator_id: int, target_user_id: int, 
             if not updated:
                 raise ValueError("concurrent modification detected, please retry")
 
-            await conn.execute(
-                'UPDATE user_balance SET remaining = remaining + $1, version = version + 1 WHERE user_id = $2',
+            tgt_updated = await conn.fetchval(
+                'UPDATE user_balance SET remaining = remaining + $1, version = version + 1 WHERE user_id = $2 RETURNING id',
                 amount, target_user_id,
             )
+            if not tgt_updated:
+                raise ValueError("target user has no balance record")
 
             op_balance_after = await conn.fetchval(
                 'SELECT remaining FROM user_balance WHERE user_id = $1',
@@ -523,7 +1566,7 @@ async def distribute_credits(pool: Pool, operator_id: int, target_user_id: int, 
                 """,
                 operator_id, op_user["name"],
                 target_user_id,
-                tgt_user.get("phoneNumber") if hasattr(tgt_user, "get") else None,
+                tgt_user["phoneNumber"],
                 tgt_user["name"],
                 tenant_id, amount, remark,
             )
@@ -579,7 +1622,7 @@ async def delete_member(pool: Pool, user_id: int, tenant_id: int) -> None:
                 raise ValueError("user not found")
 
             await conn.execute(
-                'UPDATE users SET is_deleted = true WHERE id = $1 AND tenant_id = $2',
+                'UPDATE users SET is_deleted = true, is_active = false WHERE id = $1 AND tenant_id = $2',
                 user_id, tenant_id,
             )
 
@@ -598,11 +1641,12 @@ async def add_member(pool: Pool, name: str, phone_number: str, role: str, initia
         async with conn.transaction():
             new_id = await conn.fetchval(
                 """
-                INSERT INTO users (name, "phoneNumber", role, tenant_id, is_deleted, "createdAt")
-                VALUES ($1, $2, $3, $4, false, NOW())
+                INSERT INTO users (name, email, "emailVerified", "phoneNumber", role, tenant_id,
+                                   is_deleted, is_active, "createdAt", "updatedAt")
+                VALUES ($1, $2, false, $3, $4, $5, false, true, NOW(), NOW())
                 RETURNING id
                 """,
-                name, phone_number, role, tenant_id,
+                name, f"{phone_number}+{int(__import__('time').time())}@placeholder.local", phone_number, role, tenant_id,
             )
 
             await conn.execute(

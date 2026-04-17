@@ -1,0 +1,159 @@
+/* ════════════════════════════════════════
+   OVERLAY TRANSITIONS v2
+   ════════════════════════════════════════ */
+
+:root {
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* === Modal === */
+.modal-overlay {
+  background: rgba(0, 0, 0, 0);
+  pointer-events: none;
+  transition: background-color 200ms ease-out;
+  animation: none;
+}
+
+.modal-overlay .modal-container {
+  opacity: 0;
+  transform: translateY(8px) scale(0.97);
+  transition: opacity 200ms ease-out, transform 200ms ease-out;
+  animation: none;
+  will-change: opacity, transform;
+}
+
+.modal-overlay.is-open {
+  background: rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+}
+
+.modal-overlay.is-open .modal-container {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.modal-overlay.is-leaving {
+  background: rgba(0, 0, 0, 0);
+  pointer-events: none;
+  transition-duration: 160ms;
+}
+
+.modal-overlay.is-leaving .modal-container {
+  opacity: 0;
+  transform: translateY(8px) scale(0.97);
+  transition-duration: 160ms;
+}
+
+/* === Drawer === */
+.drawer-overlay {
+  background: rgba(0, 0, 0, 0);
+  pointer-events: none;
+  transition: background-color 240ms var(--ease-drawer);
+}
+
+.drawer-overlay .drawer {
+  transform: translateX(100%);
+  transition: transform 240ms var(--ease-drawer);
+  will-change: transform;
+}
+
+.drawer-overlay.is-open {
+  background: rgba(0, 0, 0, 0.4);
+  pointer-events: auto;
+}
+
+.drawer-overlay.is-open .drawer {
+  transform: translateX(0);
+}
+
+.drawer-overlay.is-leaving {
+  background: rgba(0, 0, 0, 0);
+  pointer-events: none;
+  transition-duration: 200ms;
+}
+
+.drawer-overlay.is-leaving .drawer {
+  transform: translateX(100%);
+  transition-duration: 200ms;
+}
+
+/* === Toast === */
+#toastContainer .toast-message {
+  opacity: 0;
+  transform: translateY(-12px);
+  transition: opacity 180ms ease-out, transform 180ms ease-out;
+  will-change: opacity, transform;
+}
+
+#toastContainer .toast-message.is-open {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+#toastContainer .toast-message.is-leaving {
+  opacity: 0;
+  transform: translateY(0);
+  transition-duration: 160ms;
+}
+
+/* === Dropdown === */
+.custom-select.is-open .custom-select-trigger,
+.custom-select.is-leaving .custom-select-trigger {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%232563eb' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+}
+
+.custom-select .custom-select-panel {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.98);
+  transform-origin: top;
+  max-height: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transition: opacity 180ms ease-out, transform 180ms ease-out, max-height 180ms ease-out;
+  will-change: opacity, transform;
+}
+
+.custom-select.is-open .custom-select-panel,
+.custom-select.is-leaving .custom-select-panel {
+  max-height: 240px;
+}
+
+.custom-select.is-open .custom-select-panel {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  overflow-y: auto;
+  pointer-events: auto;
+}
+
+.custom-select.is-leaving .custom-select-panel {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.98);
+  overflow: hidden;
+  transition-duration: 120ms;
+}
+
+/* === Page transition === */
+.page,
+.tab-content {
+  opacity: 1;
+  transform: translateX(0);
+  transition: opacity 160ms ease-out, transform 160ms ease-out;
+  will-change: opacity, transform;
+}
+
+.page.active.is-entering,
+.tab-content.active.is-entering {
+  opacity: 0;
+  transform: translateX(8px);
+}
+
+.page.active.is-leaving,
+.tab-content.active.is-leaving {
+  opacity: 0;
+  transform: translateX(-8px);
+  transition-duration: 120ms;
+  pointer-events: none;
+}

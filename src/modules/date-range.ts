@@ -1,127 +1,237 @@
-import { updateCharts, createDonutChart, renderHighlightCards, createInteractionDonut, setCurrentRange } from './charts'
+import { updateCharts, createDonutChart, renderHighlightCards, createInteractionDonut, setCurrentRange, setHighlightLoading } from './charts'
 import { renderAchievements } from './achievements'
-import { initROICard, renderROIPlatformCard } from './reports'
-import { animateAllNumbers } from './utils'
+import { showLoader, hideLoader } from './loader'
 import { openModal, closeModal, showToast } from './modal-toast'
-import { HIGHLIGHT_DATA } from '../data/highlights'
-import { mockData, INTERACTION_BREAKDOWN } from '../data/charts'
+import { INTERACTION_BREAKDOWN } from '../data/charts'
 import { PLATFORM_BREAKDOWN } from '../data/platforms'
-import { tryLiveHighlights } from './api-integration'
+import { fetchDashboardData } from './api-integration'
+
+function emptyOpsTrend(): any {
+  return {
+    dates: [],
+    success: [],
+    failed: [],
+    total: [],
+    comments: [],
+    likes: [],
+    dms: [],
+    reach: [],
+    runtime: [],
+    saves: [],
+    cost: [],
+    credits: [],
+  }
+}
+
+function getLocalDateStr(d?: Date): string {
+  var date = d || new Date()
+  return date.getFullYear() + '-' +
+    String(date.getMonth() + 1).padStart(2, '0') + '-' +
+    String(date.getDate()).padStart(2, '0')
+}
+
+function triggerSnapshotBoot(range: string, custom?: { start: string; end: string }) {
+  var boot = (window as any).bootDashboardSnapshot
+  showLoader()
+  if (typeof boot === 'function') {
+    return Promise.resolve(boot(range, custom)).finally(hideLoader)
+  }
+  return fetchDashboardData(range, custom).then(function(snap) {
+    renderHighlightCards((snap && snap.highlights && snap.highlights.cards) || [], range)
+    if (typeof renderAchievements === 'function') {
+      renderAchievements((snap && snap.achievements && snap.achievements.achievements) || [])
+    }
+    PLATFORM_BREAKDOWN[range] = snap && snap.charts && Array.isArray(snap.charts.platform_breakdown)
+      ? snap.charts.platform_breakdown
+      : []
+    INTERACTION_BREAKDOWN[range] = snap && snap.charts && Array.isArray(snap.charts.interaction_breakdown)
+      ? snap.charts.interaction_breakdown
+      : []
+    if (typeof createDonutChart === 'function') createDonutChart(range)
+    if (typeof createInteractionDonut === 'function') createInteractionDonut(range)
+    var trend = snap && snap.ops_trend
+      ? {
+          dates: Array.isArray(snap.ops_trend.dates) && snap.ops_trend.dates.length
+            ? snap.ops_trend.dates
+            : (Array.isArray(snap.ops_trend.labels) ? snap.ops_trend.labels : []),
+          success: Array.isArray(snap.ops_trend.success) ? snap.ops_trend.success : [],
+          failed: Array.isArray(snap.ops_trend.failed) ? snap.ops_trend.failed : [],
+          total: Array.isArray(snap.ops_trend.total) ? snap.ops_trend.total : (Array.isArray(snap.ops_trend.exec) ? snap.ops_trend.exec : []),
+          comments: Array.isArray(snap.ops_trend.comments) ? snap.ops_trend.comments : [],
+          likes: Array.isArray(snap.ops_trend.likes) ? snap.ops_trend.likes : [],
+          dms: Array.isArray(snap.ops_trend.dms) ? snap.ops_trend.dms : [],
+          reach: Array.isArray(snap.ops_trend.reach) ? snap.ops_trend.reach : [],
+          runtime: Array.isArray(snap.ops_trend.runtime) ? snap.ops_trend.runtime : [],
+          saves: Array.isArray(snap.ops_trend.saves) ? snap.ops_trend.saves : [],
+          cost: Array.isArray(snap.ops_trend.cost) ? snap.ops_trend.cost : [],
+          credits: Array.isArray(snap.ops_trend.cost) ? snap.ops_trend.cost : [],
+        }
+      : emptyOpsTrend()
+    updateCharts(range, trend)
+  }).finally(hideLoader)
+}
 
 export function setRange(range, btn) {
   if (range === 'custom') { openDatePickerModal(btn); return; }
   btn.parentElement.querySelectorAll('.toolbar-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  // 重置自定义按钮文字
   var allBtns = btn.parentElement.querySelectorAll('.toolbar-btn');
   var customBtn = allBtns[allBtns.length - 1];
   if (customBtn && customBtn !== btn) customBtn.textContent = '自定义';
   setCurrentRange(range);
-  updateCharts(range);
-  renderHighlightCards(HIGHLIGHT_DATA[range] || HIGHLIGHT_DATA['7d'], range);
-  if (typeof renderAchievements === 'function') renderAchievements(range);
-  if (typeof createDonutChart === 'function') createDonutChart(range);
-  if (typeof createInteractionDonut === 'function') createInteractionDonut(range);
-  if (typeof animateAllNumbers === 'function') animateAllNumbers();
-  initROICard(range);
-  renderROIPlatformCard(range);
-  tryLiveHighlights(range);
+  setHighlightLoading();
+  triggerSnapshotBoot(range);
 }
 
-export function openDatePickerModal() {
-  var today = new Date().toISOString().slice(0,10);
-  var weekAgo = new Date(Date.now() - 7*86400000).toISOString().slice(0,10);
-  var body =
-    '<div class="modal-field"><label class="modal-label">时间范围</label>' +
-    '<div class="datepicker-row">' +
-    '<input type="date" id="dpStart" value="'+weekAgo+'" max="'+today+'">' +
-    '<span style="color:#a1a1aa;flex-shrink:0;">至</span>' +
-    '<input type="date" id="dpEnd" value="'+today+'" max="'+today+'">' +
+var calState = {
+  viewYear: new Date().getFullYear(),
+  viewMonth: new Date().getMonth(),
+  startDate: '',
+  endDate: '',
+  pickStep: 0,
+};
+
+function fmtCal(d) { return d ? d.replace(/-/g, '/') : '----/--/--'; }
+
+export function openDatePickerModal(_anchor?) {
+  var today = new Date();
+  calState.viewYear = today.getFullYear();
+  calState.viewMonth = today.getMonth();
+  calState.startDate = getLocalDateStr(new Date(Date.now() - 7 * 86400000));
+  calState.endDate = getLocalDateStr(today);
+  calState.pickStep = 0;
+
+  var body = '<div class="cal-picker">' +
+    '<div class="cal-inputs">' +
+    '<div class="cal-input-box" id="calStartBox">' + fmtCal(calState.startDate) + '</div>' +
+    '<span class="cal-separator">至</span>' +
+    '<div class="cal-input-box" id="calEndBox">' + fmtCal(calState.endDate) + '</div>' +
     '</div>' +
     '<div class="datepicker-presets">' +
-    '<button class="datepicker-preset-btn" onclick="setDatePreset(7)">近 7 天</button>' +
-    '<button class="datepicker-preset-btn" onclick="setDatePreset(14)">近 14 天</button>' +
-    '<button class="datepicker-preset-btn" onclick="setDatePreset(30)">近 30 天</button>' +
-    '<button class="datepicker-preset-btn" onclick="setDatePreset(90)">近 90 天</button>' +
-    '</div></div>';
-  var footer =
-    '<button class="modal-btn modal-btn-cancel" onclick="closeModal()">取消</button>' +
-    '<button class="modal-btn modal-btn-primary" onclick="applyCustomRange()">确定</button>';
+    '<button class="datepicker-preset-btn" onclick="calPreset(7)">近 7 天</button>' +
+    '<button class="datepicker-preset-btn" onclick="calPreset(14)">近 14 天</button>' +
+    '<button class="datepicker-preset-btn" onclick="calPreset(30)">近 30 天</button>' +
+    '<button class="datepicker-preset-btn" onclick="calPreset(90)">近 90 天</button>' +
+    '</div>' +
+    '<div class="cal-nav">' +
+    '<button class="cal-nav-btn" onclick="calPrevMonth()">◀</button>' +
+    '<span class="cal-nav-title" id="calNavTitle"></span>' +
+    '<button class="cal-nav-btn" onclick="calNextMonth()">▶</button>' +
+    '</div>' +
+    '<div class="cal-weekdays"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>' +
+    '<div class="cal-grid" id="calGrid"></div>' +
+    '</div>';
+  var footer = '<button class="modal-btn modal-btn-cancel" onclick="closeModal()">取消</button>' +
+    '<button class="modal-btn modal-btn-primary" onclick="calApply()">确定</button>';
   openModal('自定义时间范围', body, footer);
+  renderCalendar();
+}
+
+function calCell(day, dateStr, todayStr, extra) {
+  var cls = 'cal-cell';
+  if (extra) cls += ' ' + extra;
+  if (dateStr > todayStr) cls += ' disabled';
+  if (dateStr === todayStr) cls += ' today';
+  if (dateStr === calState.startDate || dateStr === calState.endDate) cls += ' selected';
+  if (calState.startDate && calState.endDate && dateStr > calState.startDate && dateStr < calState.endDate) cls += ' in-range';
+  var onclick = dateStr > todayStr ? '' : ' onclick="calSelectDate(\'' + dateStr + '\')"';
+  return '<div class="' + cls + '"' + onclick + '>' + day + '</div>';
+}
+
+export function renderCalendar() {
+  var y = calState.viewYear, mo = calState.viewMonth;
+  var titleEl = document.getElementById('calNavTitle');
+  if (titleEl) titleEl.textContent = y + '年' + (mo + 1) + '月';
+  var grid = document.getElementById('calGrid');
+  if (!grid) return;
+  var todayStr = getLocalDateStr();
+  var firstDay = new Date(y, mo, 1).getDay();
+  var daysInMonth = new Date(y, mo + 1, 0).getDate();
+  var daysInPrev = new Date(y, mo, 0).getDate();
+  var cells = '';
+  for (var i = firstDay - 1; i >= 0; i--) {
+    var d = daysInPrev - i;
+    var pm = mo === 0 ? 11 : mo - 1, py = mo === 0 ? y - 1 : y;
+    cells += calCell(d, py + '-' + String(pm + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0'), todayStr, 'other-month');
+  }
+  for (var d = 1; d <= daysInMonth; d++) {
+    cells += calCell(d, y + '-' + String(mo + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0'), todayStr, '');
+  }
+  var total = firstDay + daysInMonth;
+  var rem = total % 7 === 0 ? 0 : 7 - (total % 7);
+  for (var d = 1; d <= rem; d++) {
+    var nm = mo === 11 ? 0 : mo + 1, ny = mo === 11 ? y + 1 : y;
+    cells += calCell(d, ny + '-' + String(nm + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0'), todayStr, 'other-month');
+  }
+  grid.innerHTML = cells;
+  var startBox = document.getElementById('calStartBox');
+  var endBox = document.getElementById('calEndBox');
+  if (startBox) startBox.textContent = fmtCal(calState.startDate);
+  if (endBox) endBox.textContent = fmtCal(calState.endDate);
+}
+
+export function calSelectDate(dateStr) {
+  if (calState.pickStep === 0) {
+    calState.startDate = dateStr;
+    calState.endDate = '';
+    calState.pickStep = 1;
+  } else {
+    if (dateStr < calState.startDate) {
+      calState.endDate = calState.startDate;
+      calState.startDate = dateStr;
+    } else {
+      calState.endDate = dateStr;
+    }
+    calState.pickStep = 0;
+  }
+  renderCalendar();
+}
+
+export function calPreset(days) {
+  var todayStr = getLocalDateStr();
+  calState.startDate = getLocalDateStr(new Date(Date.now() - days * 86400000));
+  calState.endDate = todayStr;
+  calState.pickStep = 0;
+  var ed = new Date(todayStr);
+  calState.viewYear = ed.getFullYear();
+  calState.viewMonth = ed.getMonth();
+  renderCalendar();
+}
+
+export function calPrevMonth() {
+  if (calState.viewMonth === 0) { calState.viewMonth = 11; calState.viewYear--; }
+  else calState.viewMonth--;
+  renderCalendar();
+}
+
+export function calNextMonth() {
+  var now = new Date();
+  if (calState.viewYear === now.getFullYear() && calState.viewMonth >= now.getMonth()) return;
+  if (calState.viewMonth === 11) { calState.viewMonth = 0; calState.viewYear++; }
+  else calState.viewMonth++;
+  renderCalendar();
+}
+
+export function calApply() {
+  if (!calState.startDate || !calState.endDate) { showToast('请选择完整的时间范围', 'error'); return; }
+  closeModal();
+  var btns = document.querySelectorAll('#page-dashboard .toolbar .toolbar-btn');
+  btns.forEach(function(b) { b.classList.remove('active'); });
+  var customBtn = btns[btns.length - 1];
+  customBtn.classList.add('active');
+  customBtn.textContent = calState.startDate.slice(5).replace('-', '/') + ' ~ ' + calState.endDate.slice(5).replace('-', '/');
+  setCurrentRange('custom');
+  setHighlightLoading();
+  triggerSnapshotBoot('custom', { start: calState.startDate, end: calState.endDate });
 }
 
 export function setDatePreset(days) {
-  var today = new Date().toISOString().slice(0,10);
-  var start = new Date(Date.now() - days*86400000).toISOString().slice(0,10);
-  document.getElementById('dpStart').value = start;
-  document.getElementById('dpEnd').value = today;
-}
-
-function populateCustomRange(days) {
-  var base = days <= 1 ? mockData.today : days <= 14 ? mockData['7d'] : mockData['30d'];
-  var labels = [];
-  var now = new Date();
-  for (var i = days - 1; i >= 0; i--) {
-    var dt = new Date(now.getTime() - i * 86400000);
-    labels.push(String(dt.getMonth()+1).padStart(2,'0') + '/' + String(dt.getDate()).padStart(2,'0'));
-  }
-  function extend(arr) {
-    var result = [];
-    for (var i = 0; i < days; i++) {
-      var v = arr[i % arr.length];
-      var trend = 0.7 + (i / Math.max(1, days - 1)) * 0.6;
-      var wave = 1 + 0.12 * Math.sin(i * 0.4);
-      result.push(Math.max(0, Math.round(v * trend * wave)));
-    }
-    return result;
-  }
-  function extendFloat(arr) {
-    var result = [];
-    for (var i = 0; i < days; i++) {
-      var v = arr[i % arr.length];
-      var trend = 0.7 + (i / Math.max(1, days - 1)) * 0.6;
-      var wave = 1 + 0.12 * Math.sin(i * 0.4);
-      result.push(parseFloat((Math.max(0, v * trend * wave)).toFixed(1)));
-    }
-    return result;
-  }
-  var exec = extend(base.exec), success = extend(base.success), cost = extend(base.cost), reach = extend(base.reach);
-  var totalExec = exec.reduce(function(a,b){return a+b;},0);
-  var totalSuccess = success.reduce(function(a,b){return a+b;},0);
-  var totalCost = cost.reduce(function(a,b){return a+b;},0);
-  var totalReach = reach.reduce(function(a,b){return a+b;},0);
-  var scale = days / 30;
-  mockData.custom = {
-    labels: labels, exec: exec, success: success, cost: cost,
-    data: extend(base.data || base.success), reach: reach,
-    comments: extend(base.comments), likes: extend(base.likes),
-    dms: extend(base.dms), runtime: extendFloat(base.runtime),
-    statExec: totalExec.toLocaleString(),
-    statRate: (totalExec > 0 ? Math.round(totalSuccess/totalExec*100) : 0) + '%',
-    statRateSub: totalSuccess + ' 成功 / ' + totalExec + ' 总计',
-    statCost: totalCost.toLocaleString(),
-    execChange: '+' + Math.round(scale * 5 + 10) + '%',
-    costChange: '-' + Math.round(scale * 3 + 5) + '%',
-    statReach: totalReach.toLocaleString(),
-    reachChange: '+' + Math.round(scale * 5 + 12) + '%',
-    costAvg: Math.round(totalCost / Math.max(1, days)) + ' 算力豆',
-    costPer: '10 算力豆', costWow: '-' + Math.round(scale * 3 + 5) + '%',
-    trendDesc: '多维度数据对比', costDesc: '自定义时段算力豆消耗', reachDesc: '自定义时段触达量',
-  };
-  var h30 = HIGHLIGHT_DATA['30d'];
-  (HIGHLIGHT_DATA as any).custom = h30.map(function(h) {
-    var scaled = Math.round(h.value * scale);
-    var prevScaled = Math.round(h.prev * scale * (0.85 + Math.random() * 0.1));
-    return { key: h.key, label: h.label, value: scaled, prev: prevScaled, unit: h.unit || '', sparkline: h.sparkline };
-  });
-  var ib30 = INTERACTION_BREAKDOWN['30d'];
-  (INTERACTION_BREAKDOWN as any).custom = ib30.map(function(item) {
-    return { name: item.name, value: Math.round(item.value * scale), color: item.color };
-  });
-  var pb30 = PLATFORM_BREAKDOWN['30d'];
-  PLATFORM_BREAKDOWN.custom = pb30.map(function(item) {
-    return { name: item.name, value: Math.round(item.value * scale), color: item.color };
-  });
+  var today = getLocalDateStr();
+  var start = getLocalDateStr(new Date(Date.now() - days * 86400000));
+  var startEl = document.getElementById('dpStart') as HTMLInputElement | null;
+  var endEl = document.getElementById('dpEnd') as HTMLInputElement | null;
+  if (startEl) startEl.value = start;
+  if (endEl) endEl.value = today;
 }
 
 export function applyCustomRange() {
@@ -131,20 +241,12 @@ export function applyCustomRange() {
   var end = endEl ? endEl.value : '';
   if (!start || !end || start > end) { showToast('请选择有效的时间范围', 'error'); return; }
   closeModal();
-  var days = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86400000) + 1;
-  populateCustomRange(days);
   var btns = document.querySelectorAll('#page-dashboard .toolbar .toolbar-btn');
   btns.forEach(function(b) { b.classList.remove('active'); });
   var customBtn = btns[btns.length - 1];
   customBtn.classList.add('active');
   customBtn.textContent = start.slice(5).replace('-','/') + ' ~ ' + end.slice(5).replace('-','/');
   setCurrentRange('custom');
-  updateCharts('custom');
-  renderHighlightCards(HIGHLIGHT_DATA['custom'] || HIGHLIGHT_DATA['7d'], 'custom');
-  if (typeof renderAchievements === 'function') renderAchievements('custom');
-  if (typeof createDonutChart === 'function') createDonutChart('custom');
-  if (typeof createInteractionDonut === 'function') createInteractionDonut('custom');
-  if (typeof animateAllNumbers === 'function') animateAllNumbers();
-  initROICard('custom');
-  renderROIPlatformCard('custom');
+  setHighlightLoading();
+  triggerSnapshotBoot('custom', { start: start, end: end });
 }

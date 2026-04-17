@@ -1,34 +1,61 @@
-import { mockData, INTERACTION_BREAKDOWN } from '../data/charts'
-import { HIGHLIGHT_DATA, computeChange, formatValue } from '../data/highlights'
-import { PLATFORM_BREAKDOWN } from '../data/platforms'
-import { computeAchievements } from './achievements'
-import { ACHIEVEMENT_CONTEXTS } from '../data/achievements'
-import { skillData } from '../data/scenarios'
+import { computeChange } from '../data/highlights'
 import { Chart } from 'chart.js'
-import { calcROI, calcROIPlatforms } from '../data/roi'
-import { platformColors } from '../data/platforms'
+import { fetchDashboardData } from './api-integration'
+import { formatCompareText } from './utils'
 
 let currentReportBlob = null
 let currentReportDim = 'week'
 let roiPlatformChart = null
 
-export function initROICard(range?) {
-  var r = calcROI(range || '7d');
+export function initROICard(_range?) {
   var numEl = document.getElementById('roiNumber');
   var descEl = document.getElementById('roiDesc');
   var valueEl = document.getElementById('roiValue');
   var costEl = document.getElementById('roiCost');
   var savedEl = document.getElementById('roiSaved');
   var bdEl = document.getElementById('roiBreakdown');
-  if (numEl) numEl.textContent = r.roi.toFixed(1) + 'x';
-  if (descEl) descEl.textContent = '每投入 1 元算力豆，产出 ' + r.roi.toFixed(1) + ' 元人工价值';
-  if (valueEl) valueEl.textContent = '¥' + Math.round(r.value).toLocaleString();
-  if (costEl) costEl.textContent = '¥' + Math.round(r.cost).toLocaleString();
-  if (savedEl) savedEl.textContent = '¥' + Math.round(r.saved).toLocaleString() + ' (' + r.savedPct + '%)';
+  if (numEl) numEl.textContent = '0.0x';
+  if (descEl) descEl.textContent = '每投入 1 元算力豆，产出 0.0 元人工价值';
+  if (valueEl) valueEl.textContent = '¥0';
+  if (costEl) costEl.textContent = '¥0';
+  if (savedEl) savedEl.textContent = '¥0 (0%)';
+  if (bdEl) bdEl.innerHTML = '';
+}
+
+function roiNumber(value: any) {
+  var num = typeof value === 'number' ? value : parseFloat(String(value || '').replace(/[^\d.-]/g, ''))
+  return isNaN(num) ? 0 : num
+}
+
+export function renderRoiFromCharts(roi: any) {
+  if (!roi) return
+  var hero = document.getElementById('roiHero')
+  if (hero) {
+    hero.classList.remove('beta-overlay-wrap')
+    hero.querySelectorAll('.beta-overlay').forEach(function(node) { node.remove() })
+  }
+  var roiValue = roiNumber(roi.roi)
+  var value = roiNumber(roi.value)
+  var cost = roiNumber(roi.cost)
+  var saved = roiNumber(roi.saved)
+  var savedPct = roiNumber(roi.saved_pct ?? roi.savedPct)
+  var numEl = document.getElementById('roiNumber')
+  var descEl = document.getElementById('roiDesc')
+  var valueEl = document.getElementById('roiValue')
+  var costEl = document.getElementById('roiCost')
+  var savedEl = document.getElementById('roiSaved')
+  var bdEl = document.getElementById('roiBreakdown')
+  if (numEl) numEl.textContent = roiValue.toFixed(1) + 'x'
+  if (descEl) descEl.textContent = roi.desc || ('每投入 1 元算力豆，产出 ' + roiValue.toFixed(1) + ' 元人工价值')
+  if (valueEl) valueEl.textContent = '¥' + Math.round(value).toLocaleString()
+  if (costEl) costEl.textContent = '¥' + Math.round(cost).toLocaleString()
+  if (savedEl) savedEl.textContent = '¥' + Math.round(saved).toLocaleString() + ' (' + Math.round(savedPct) + '%)'
   if (bdEl) {
-    bdEl.innerHTML = r.breakdown.filter(function(b) { return b.count > 0; }).map(function(b) {
-      return '<div class="roi-breakdown-item"><strong>' + b.label + '</strong> ' + b.count + b.unit + ' → ¥' + Math.round(b.subtotal) + '</div>';
-    }).join('');
+    var breakdown = Array.isArray(roi.breakdown) ? roi.breakdown : []
+    bdEl.innerHTML = breakdown.map(function(item) {
+      return '<div class="roi-breakdown-item"><strong>' + (item.label || item.name || '项目') + '</strong> ' +
+        roiNumber(item.count).toLocaleString() + (item.unit || '') + ' → ¥' + Math.round(roiNumber(item.subtotal)).toLocaleString() + '</div>'
+    }).join('')
   }
 }
 
@@ -142,267 +169,631 @@ function getReportDateRange(dim) {
   return fmt(lastMonthStart) + ' - ' + fmt(lastMonthEnd);
 }
 
-export function buildReportHTML(dim) {
+function betaOverlayHTML(badge?: string, sub?: string) {
+  return '<div style="position:absolute;inset:0;background:rgba(255,255,255,0.75);display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:16px;z-index:2;">' +
+    '<div style="padding:6px 16px;background:#2563eb;color:#fff;font-size:13px;font-weight:700;border-radius:20px;letter-spacing:1px;">' + (badge || 'Beta') + '</div>' +
+    '<div style="font-size:12px;color:#64748b;margin-top:8px;">' + (sub || '数据即将上线') + '</div>' +
+  '</div>';
+}
+
+async function buildReportHTML(dim) {
   var dimLabels = { day:'日报', week:'周报', month:'月报' };
   var dimData = { day:'today', week:'7d', month:'30d' };
+  var compareLabels = { day:'较昨日', week:'较上周', month:'较上月' };
   var range = dimData[dim] || '7d';
-  var hl = HIGHLIGHT_DATA[range] || HIGHLIGHT_DATA['7d'];
-  var roiResult = calcROI(range);
-  var roiPlatforms = calcROIPlatforms(range).filter(function(p) { return p.comments + p.dms + p.likes + p.saves > 0; });
   var dateLabel = getReportDateRange(dim);
-  var achCtx = ACHIEVEMENT_CONTEXTS[range] || ACHIEVEMENT_CONTEXTS['7d'];
-  var achievements = computeAchievements(achCtx);
-  var platformData = PLATFORM_BREAKDOWN[range] || PLATFORM_BREAKDOWN['7d'];
-  var interactionData = INTERACTION_BREAKDOWN[range] || INTERACTION_BREAKDOWN['7d'];
-  var chartData = mockData[range] || mockData['7d'];
-  var genTime = new Date().toLocaleString('zh-CN', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+  var fallbackHighlights = [];
+  var fallbackAchievements = [];
+  var fallbackPlatformData = [];
+  var fallbackInteractionData = [];
+  var fallbackTrendData: any = {
+    labels: [],
+    data: [],
+    exec: [],
+    success: [],
+    failed: [],
+    total: [],
+    comments: [],
+    likes: [],
+    dms: [],
+    reach: [],
+    runtime: [],
+    saves: [],
+    cost: [],
+    statRuntime: null,
+    execChange: null,
+    costWow: null,
+    reachChange: null,
+  };
 
-  var container = document.createElement('div');
-  container.style.cssText = 'position:fixed;left:-9999px;top:0;width:1200px;background:#f8fafc;padding:0;box-sizing:border-box;font-family:-apple-system,PingFang SC,sans-serif;color:#09090b;';
+  function esc(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
 
-  // -- SVG bar chart for platforms --
-  function svgPlatformBars() {
-    if (!roiPlatforms.length) return '';
-    var w = 1080;
-    var leftColW = 120, rightColW = 60, padX = 20;
-    var headerH = 50, rowH = 60, barH = 24;
-    var h = headerH + roiPlatforms.length * rowH;
-    var barAreaW = w - leftColW - rightColW - padX * 2;
-    var maxBarW = barAreaW * 0.75;
-    var barX = padX + leftColW;
-    var roiX = w - padX;
-    var maxVal = Math.max.apply(null, roiPlatforms.map(function(p) { return Math.max(0, Number(p.value) || 0); }));
-    if (!maxVal) maxVal = 1;
-    function formatMoney(amount) { return '¥' + Math.round(Math.max(0, Number(amount) || 0)); }
-    function clamp(num, mn, mx) { return Math.min(mx, Math.max(mn, num)); }
-    var rows = '';
-    roiPlatforms.forEach(function(p, i) {
-      var color = platformColors[p.name] || '#2563eb';
-      var value = Math.max(0, Number(p.value) || 0);
-      var cost = Math.max(0, Number(p.cost) || 0);
-      var roi = Math.max(0, Number(p.roi) || 0);
-      var barWidth = (value / maxVal) * maxBarW;
-      var costWidth = barWidth * (value > 0 ? clamp(cost / value, 0, 1) : 0);
-      var rowCenterY = headerH + i * rowH + rowH / 2;
-      var barY = rowCenterY - barH / 2;
-      var costText = formatMoney(cost);
-      var valueText = formatMoney(value);
-      var costFitsInside = costWidth >= costText.length * 7 + 16;
-      var costLabelX = costFitsInside ? barX + 10 : barX + costWidth + 8;
-      var costLabelFill = costFitsInside ? '#ffffff' : '#475569';
-      rows += '<text x="' + padX + '" y="' + rowCenterY + '" font-size="14" font-weight="600" fill="#111827" dominant-baseline="middle" font-family="-apple-system,PingFang SC,sans-serif">' + p.name + '</text>';
-      rows += '<rect x="' + barX.toFixed(1) + '" y="' + barY.toFixed(1) + '" width="' + barWidth.toFixed(1) + '" height="' + barH + '" rx="6" fill="' + color + '" opacity="0.4"/>';
-      rows += '<rect x="' + barX.toFixed(1) + '" y="' + barY.toFixed(1) + '" width="' + costWidth.toFixed(1) + '" height="' + barH + '" rx="6" fill="' + color + '" opacity="0.95"/>';
-      if (cost > 0) {
-        rows += '<text x="' + costLabelX.toFixed(1) + '" y="' + rowCenterY + '" font-size="12" font-weight="600" fill="' + costLabelFill + '" dominant-baseline="middle" font-family="-apple-system,PingFang SC,sans-serif">' + costText + '</text>';
+  function safeArray(value) {
+    return Array.isArray(value) ? value : [];
+  }
+
+  function asNumber(value) {
+    if (typeof value === 'number') return isNaN(value) ? null : value;
+    if (typeof value === 'string') {
+      var cleaned = value.replace(/,/g, '').replace(/[^\d.+-]/g, '');
+      if (!cleaned) return null;
+      var parsed = parseFloat(cleaned);
+      return isNaN(parsed) ? null : parsed;
+    }
+    return null;
+  }
+
+  function toCount(value) {
+    var num = asNumber(value);
+    return num == null ? null : Math.max(0, Math.round(num));
+  }
+
+  function formatInteger(value) {
+    var num = toCount(value);
+    return num == null ? '—' : num.toLocaleString();
+  }
+
+  function formatRuntime(value) {
+    if (value == null || value === '') return '—';
+    if (typeof value === 'number' && !isNaN(value)) return Math.round(value) + 'h';
+    return String(value);
+  }
+
+  function normalizeCompareText(text) {
+    return String(text || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function derivePrevFromChange(curValue, changeValue) {
+    var cur = asNumber(curValue);
+    var pct = asNumber(changeValue);
+    if (cur == null || pct == null) return null;
+    var factor = 1 + pct / 100;
+    if (!isFinite(factor) || factor === 0) return null;
+    return cur / factor;
+  }
+
+  function achievementCompareMeta(item) {
+    var hasRawCompare = !!(item && item.current !== undefined && item.prev !== undefined);
+    if (hasRawCompare) {
+      var rawCompare = formatCompareText(asNumber(item.current) ?? 0, asNumber(item.prev) ?? 0, item && item.label || '', 'achievement');
+      return { cls: rawCompare.cls, text: normalizeCompareText(rawCompare.text) };
+    }
+
+    var hasBestCompare = !!(item && item.bestCurrent !== undefined && item.bestPrev !== undefined);
+    if (hasBestCompare) {
+      var bestCompare = formatCompareText(asNumber(item.bestCurrent) ?? 0, asNumber(item.bestPrev) ?? 0, item && item.label || '', 'achievement');
+      return { cls: bestCompare.cls, text: normalizeCompareText(bestCompare.text) };
+    }
+
+    var current = asNumber(item && item.value);
+    var prev = asNumber(item && item.prev);
+    if (current == null) {
+      var delta = asNumber(item && item.delta_text);
+      var pct = asNumber(item && item.change_pct);
+      if (delta != null && pct != null) {
+        if (pct === 0) {
+          current = delta;
+          prev = 0;
+        } else {
+          var derivedPrev = delta / (pct / 100);
+          if (isFinite(derivedPrev)) {
+            prev = derivedPrev;
+            current = derivedPrev + delta;
+          }
+        }
+      } else if (delta != null) {
+        current = delta;
+        prev = 0;
       }
-      rows += '<text x="' + (barX + barWidth + 10).toFixed(1) + '" y="' + rowCenterY + '" font-size="12" font-weight="600" fill="#0f172a" dominant-baseline="middle" font-family="-apple-system,PingFang SC,sans-serif">' + valueText + '</text>';
-      rows += '<text x="' + roiX + '" y="' + rowCenterY + '" text-anchor="end" font-size="15" font-weight="700" fill="#2563eb" dominant-baseline="middle" font-family="-apple-system,PingFang SC,sans-serif">' + roi.toFixed(1) + 'x</text>';
+    }
+    if (current == null || prev == null) {
+      return {
+        cls: item && item.change_cls ? item.change_cls : 'flat',
+        text: normalizeCompareText(item && item.text ? item.text : ''),
+      };
+    }
+    var compare = formatCompareText(current == null ? 0 : current, prev, '', 'achievement');
+    return { cls: compare.cls, text: normalizeCompareText(compare.text) };
+  }
+
+  function cardMatches(card, keys) {
+    if (!card) return false;
+    var key = String(card.key || '').toLowerCase();
+    var label = String(card.label || '').toLowerCase();
+    for (var i = 0; i < keys.length; i++) {
+      var token = String(keys[i] || '').toLowerCase();
+      if (!token) continue;
+      if (key === token || key.indexOf(token) >= 0 || label.indexOf(token) >= 0) return true;
+    }
+    return false;
+  }
+
+  function cardHasSeries(card) {
+    return !!(card && card.series && safeArray(card.series.values).length);
+  }
+
+  function findCard(cards, keys, requireSeries) {
+    var list = safeArray(cards);
+    for (var i = 0; i < list.length; i++) {
+      if (cardMatches(list[i], keys) && (!requireSeries || cardHasSeries(list[i]))) return list[i];
+    }
+    if (!requireSeries) return null;
+    for (var j = 0; j < list.length; j++) {
+      if (cardHasSeries(list[j])) return list[j];
+    }
+    return null;
+  }
+
+  function getCardChange(card) {
+    if (!card) return null;
+    if (typeof card.change_pct === 'number' && !isNaN(card.change_pct)) return card.change_pct;
+    var value = asNumber(card.value);
+    var prev = asNumber(card.prev);
+    if (value != null && prev != null && prev !== 0) return computeChange(value, prev).pct;
+    return null;
+  }
+
+  function renderTrendMeta(curValue, prevValue, fallbackChangePct?) {
+    var compare;
+    if (prevValue == null && fallbackChangePct != null) {
+      prevValue = derivePrevFromChange(curValue, fallbackChangePct);
+    }
+    if (prevValue != null || fallbackChangePct != null) {
+      compare = formatCompareText(curValue ?? 0, prevValue ?? 0, compareLabel);
+    } else {
+      compare = formatCompareText(curValue ?? 0, null, compareLabel);
+    }
+    if (compare.cls === 'up') return { arrow: '↗', color: '#16a34a', text: compare.text };
+    if (compare.cls === 'down') return { arrow: '↘', color: '#dc2626', text: compare.text };
+    return {
+      arrow: '→',
+      color: compare.text.indexOf('暂无对比') >= 0 ? '#94a3b8' : '#64748b',
+      text: compare.text,
+    };
+  }
+
+  function renderTrendText(card, fallbackChangePct?) {
+    var meta = renderTrendMeta(asNumber(card && card.value), asNumber(card && card.prev), fallbackChangePct);
+    return '<div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:' + meta.color + ';"><span>' + meta.arrow + '</span><span>' + esc(meta.text) + '</span></div>';
+  }
+
+  function normalizeBreakdown(items, palette) {
+    return safeArray(items).map(function(item, index) {
+      return {
+        name: item && (item.name || item.label || ('项目' + (index + 1))),
+        value: Math.max(0, Math.round(asNumber(item && (item.value ?? item.count ?? item.total ?? item.amount)) || 0)),
+        color: item && item.color || palette[index % palette.length],
+      };
+    }).filter(function(item) {
+      return item.value > 0;
+    }).sort(function(a, b) {
+      return b.value - a.value;
     });
-    var legend = '<text x="' + (w - padX) + '" y="20" text-anchor="end" font-size="12" fill="#475569" font-family="-apple-system,PingFang SC,sans-serif"><tspan fill="#64748b">■</tspan> 人工价值</text>' +
-      '<text x="' + (w - padX) + '" y="38" text-anchor="end" font-size="12" fill="#475569" font-family="-apple-system,PingFang SC,sans-serif"><tspan fill="#94a3b8">□</tspan> 算力豆支出</text>';
-    return '<svg width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '" xmlns="http://www.w3.org/2000/svg">' +
-      legend + rows + '</svg>';
   }
 
-  // -- Donut with percentages --
-  function svgDonutPro(data, size, centerLabel) {
-    var total = data.reduce(function(a, d) { return a + d.value; }, 0);
-    if (!total) return '';
-    var cx = size / 2, cy = size / 2, r = size * 0.36, sw = size * 0.15;
-    var circ = 2 * Math.PI * r;
-    var offset = 0;
-    var paths = data.map(function(d) {
-      var pct = d.value / total;
-      var dashLen = pct * circ;
-      var s = '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="none" stroke="' + d.color + '" stroke-width="' + sw + '" stroke-dasharray="' + dashLen.toFixed(2) + ' ' + (circ - dashLen).toFixed(2) + '" stroke-dashoffset="' + (-offset).toFixed(2) + '" transform="rotate(-90 ' + cx + ' ' + cy + ')"/>';
-      offset += dashLen;
-      return s;
-    }).join('');
-    return '<svg width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + ' ' + size + '" xmlns="http://www.w3.org/2000/svg">' + paths +
-      '<text x="' + cx + '" y="' + (cy - 8) + '" text-anchor="middle" font-size="26" font-weight="800" fill="#09090b" font-family="-apple-system,PingFang SC,sans-serif">' + total + '</text>' +
-      '<text x="' + cx + '" y="' + (cy + 12) + '" text-anchor="middle" font-size="12" fill="#a1a1aa" font-family="-apple-system,PingFang SC,sans-serif">' + centerLabel + '</text></svg>';
-  }
-
-  function legendPro(data) {
-    var total = data.reduce(function(a, d) { return a + d.value; }, 0);
-    return data.map(function(d) {
-      var pct = total > 0 ? Math.round(d.value / total * 100) : 0;
-      return '<div style="display:flex;align-items:center;gap:10px;font-size:13px;padding:6px 0;border-bottom:1px solid #f4f4f5;">' +
-        '<span style="width:10px;height:10px;border-radius:3px;background:' + d.color + ';flex-shrink:0;"></span>' +
-        '<span style="color:#52525b;flex:1;">' + d.name + '</span>' +
-        '<span style="font-weight:700;color:#09090b;min-width:36px;text-align:right;">' + d.value + '</span>' +
-        '<span style="font-size:11px;color:#a1a1aa;min-width:36px;text-align:right;">' + pct + '%</span>' +
+  function legendHTML(items) {
+    var total = safeArray(items).reduce(function(sum, item) { return sum + item.value; }, 0) || 1;
+    return safeArray(items).map(function(item) {
+      var pct = Math.round(item.value / total * 100);
+      return '<div style="display:flex;align-items:center;gap:8px;font-size:13px;color:#475569;">' +
+        '<span style="width:10px;height:10px;border-radius:999px;background:' + item.color + ';flex-shrink:0;display:inline-block;"></span>' +
+        '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(item.name) + '</span>' +
+        '<span style="margin-left:auto;font-weight:700;color:#0f172a;">' + pct + '%</span>' +
       '</div>';
     }).join('');
   }
 
-  var s = function(css) { return css; }; // readability helper
+  function placeholderHTML(text) {
+    return '<div style="height:220px;display:flex;align-items:center;justify-content:center;font-size:14px;color:#94a3b8;">' + esc(text || '暂无数据') + '</div>';
+  }
 
-  // ──────────── Section styles ────────────
-  var sectionCard = 'background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:28px 32px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,0.04);';
-  var sectionTitle = 'font-size:15px;font-weight:700;color:#0f172a;margin-bottom:16px;display:flex;align-items:center;gap:8px;';
-  var sectionDot = 'width:4px;height:16px;border-radius:2px;background:#2563eb;';
+  function lineChartHTML(labels, values) {
+    if (!safeArray(values).length) return placeholderHTML('暂无数据');
+    var chartLabels = safeArray(labels).slice();
+    var chartValues = safeArray(values).map(function(value) {
+      var num = asNumber(value);
+      return num == null ? 0 : num;
+    });
+    if (chartValues.length === 1) {
+      chartValues.push(chartValues[0]);
+      chartLabels.push(chartLabels[0] || '');
+    }
+    var width = 640;
+    var height = 220;
+    var padL = 42;
+    var padR = 16;
+    var padT = 16;
+    var padB = 32;
+    var plotW = width - padL - padR;
+    var plotH = height - padT - padB;
+    var max = Math.max.apply(null, chartValues);
+    var min = Math.min.apply(null, chartValues);
+    if (max === min) {
+      max += 1;
+      min = Math.max(0, min - 1);
+    }
+    var grid = '';
+    for (var i = 0; i <= 4; i++) {
+      var y = padT + plotH * (i / 4);
+      var val = Math.round(max - (max - min) * (i / 4));
+      grid += '<line x1="' + padL + '" y1="' + y.toFixed(1) + '" x2="' + (width - padR) + '" y2="' + y.toFixed(1) + '" stroke="#e2e8f0" stroke-width="1"/>';
+      grid += '<text x="' + (padL - 8) + '" y="' + (y + 4).toFixed(1) + '" text-anchor="end" font-size="10" fill="#94a3b8" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Segoe UI,sans-serif">' + val + '</text>';
+    }
+    var points = chartValues.map(function(value, index) {
+      var x = padL + (plotW * index / Math.max(1, chartValues.length - 1));
+      var y = padT + plotH - ((value - min) / (max - min)) * plotH;
+      return { x: x, y: y, value: value };
+    });
+    var polyline = points.map(function(point) {
+      return point.x.toFixed(1) + ',' + point.y.toFixed(1);
+    }).join(' ');
+    var skip = Math.max(1, Math.ceil(chartLabels.length / 6));
+    var xLabels = '';
+    for (var j = 0; j < chartLabels.length; j++) {
+      if (j % skip === 0 || j === chartLabels.length - 1) {
+        var labelX = padL + (plotW * j / Math.max(1, chartLabels.length - 1));
+        xLabels += '<text x="' + labelX.toFixed(1) + '" y="' + (height - 8) + '" text-anchor="middle" font-size="10" fill="#94a3b8" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Segoe UI,sans-serif">' + esc(chartLabels[j] || '') + '</text>';
+      }
+    }
+    var dots = points.map(function(point, index) {
+      var r = index === points.length - 1 ? 4 : 3;
+      var fill = index === points.length - 1 ? '#1d4ed8' : '#60a5fa';
+      return '<circle cx="' + point.x.toFixed(1) + '" cy="' + point.y.toFixed(1) + '" r="' + r + '" fill="' + fill + '" stroke="#ffffff" stroke-width="2"/>';
+    }).join('');
+    return '<svg width="100%" height="220" viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">' +
+      grid +
+      xLabels +
+      '<polyline points="' + polyline + '" fill="none" stroke="#2563eb" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>' +
+      dots +
+    '</svg>';
+  }
 
+  function sectionHeading(title) {
+    return '<div style="display:flex;align-items:center;gap:10px;font-size:18px;font-weight:700;color:#1e293b;">' +
+      '<span style="width:3px;height:18px;border-radius:999px;background:#3b82f6;display:inline-block;"></span>' +
+      '<span>' + esc(title) + '</span>' +
+    '</div>';
+  }
+
+  function miniSparklineHTML(values, color) {
+    var arr = safeArray(values).map(function(v){ var n = asNumber(v); return n == null ? 0 : n; });
+    if (!arr.length) {
+      return '<div style="height:48px;background:#f1f5f9;border-radius:8px;"></div>';
+    }
+    if (arr.length === 1) arr.push(arr[0]);
+    var w = 220, h = 48, pad = 4;
+    var plotW = w - pad * 2, plotH = h - pad * 2;
+    var max = Math.max.apply(null, arr);
+    var min = Math.min.apply(null, arr);
+    if (max === min) { max += 1; min = Math.max(0, min - 1); }
+    var coords = arr.map(function(v, i) {
+      var x = pad + (plotW * i / Math.max(1, arr.length - 1));
+      var y = pad + plotH - ((v - min) / (max - min)) * plotH;
+      return { x: x, y: y };
+    });
+    var polyline = coords.map(function(p){ return p.x.toFixed(1) + ',' + p.y.toFixed(1); }).join(' ');
+    var last = coords[coords.length - 1];
+    var areaPoints = pad + ',' + (h - pad) + ' ' + polyline + ' ' + (w - pad) + ',' + (h - pad);
+    var gradId = 'spark-grad-' + Math.round(Math.random() * 1e9);
+    return '<svg width="100%" height="48" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">' +
+      '<defs><linearGradient id="' + gradId + '" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="' + color + '" stop-opacity="0.28"/><stop offset="100%" stop-color="' + color + '" stop-opacity="0"/></linearGradient></defs>' +
+      '<polygon points="' + areaPoints + '" fill="url(#' + gradId + ')"/>' +
+      '<polyline points="' + polyline + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' +
+      '<circle cx="' + last.x.toFixed(1) + '" cy="' + last.y.toFixed(1) + '" r="3" fill="' + color + '"/>' +
+    '</svg>';
+  }
+
+  function keyMetricCardHTML(card, accent) {
+    var label = card && card.label || '—';
+    var rawValue = card && card.value;
+    var value = rawValue == null || rawValue === '' ? '—' : formatInteger(rawValue);
+    var seriesValues = card && card.series && safeArray(card.series.values).length
+      ? card.series.values
+      : safeArray(card && card.sparkline);
+    return '<div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;padding:20px;box-shadow:0 10px 24px rgba(15,23,42,0.05);display:flex;flex-direction:column;gap:12px;min-height:176px;">' +
+      '<div style="display:flex;align-items:center;gap:8px;">' +
+        '<span style="width:6px;height:6px;border-radius:999px;background:' + accent + ';display:inline-block;"></span>' +
+        '<span style="font-size:13px;font-weight:600;color:#475569;">' + esc(label) + '</span>' +
+      '</div>' +
+      '<div style="font-size:34px;line-height:1.05;font-weight:800;color:#0f172a;letter-spacing:-0.02em;">' + esc(value) + '</div>' +
+      '<div>' + renderTrendText(card, getCardChange(card)) + '</div>' +
+      '<div style="margin-top:auto;">' + miniSparklineHTML(seriesValues, accent) + '</div>' +
+    '</div>';
+  }
+
+  function opsSummaryRowHTML(items) {
+    var cells = safeArray(items).map(function(item, idx) {
+      var border = idx === 0 ? 'none' : '1px solid #e2e8f0';
+      var current = asNumber(item && item.current);
+      var compare = formatCompareText(current == null ? 0 : current, item && item.prev, item && item.label || '');
+      var changeHTML = '<div class="hl-change-inline ' + compare.cls + '" style="margin-top:4px;font-size:13px;font-weight:600;">' + esc(normalizeCompareText(compare.text)) + '</div>';
+      return '<div style="min-width:0;padding:0 24px;display:flex;flex-direction:column;gap:8px;border-left:' + border + ';">' +
+        '<span style="font-size:12px;font-weight:600;color:#64748b;letter-spacing:0.02em;">' + esc(item && item.label || '') + '</span>' +
+        '<div style="display:flex;align-items:baseline;gap:8px;min-width:0;">' +
+          '<span style="font-size:24px;font-weight:800;color:#0f172a;line-height:1.1;">' + esc(item && item.value != null && item.value !== '' ? item.value : '—') + '</span>' +
+        '</div>' +
+        changeHTML +
+      '</div>';
+    }).join('');
+    return '<div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;padding:22px 4px;box-shadow:0 10px 24px rgba(15,23,42,0.04);display:grid;grid-template-columns:repeat(3,1fr);align-items:stretch;">' + cells + '</div>';
+  }
+
+  function findByKey(cards, keyName) {
+    var list = safeArray(cards);
+    var wanted = String(keyName || '').toLowerCase();
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && String(list[i].key || '').toLowerCase() === wanted) return list[i];
+    }
+    return null;
+  }
+
+  function renderBreakdownPanel(title, data, centerLabel, caption) {
+    return '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:20px;display:flex;flex-direction:column;gap:14px;min-height:320px;">' +
+      '<div style="font-size:15px;font-weight:700;color:#0f172a;">' + esc(title) + '</div>' +
+      (safeArray(data).length
+        ? '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;flex:1;">' +
+            svgDonut(data, 160, centerLabel) +
+            '<div style="width:100%;display:flex;flex-direction:column;gap:8px;">' + legendHTML(data) + '</div>' +
+          '</div>'
+        : placeholderHTML('暂无数据')) +
+      '<div style="font-size:13px;color:#64748b;line-height:1.5;">' + esc(caption) + '</div>' +
+    '</div>';
+  }
+
+  var snap = null;
+  try {
+    snap = await fetchDashboardData(range);
+  } catch (_err) {
+    snap = null;
+  }
+
+  var compareLabel = snap && snap.highlights && snap.highlights.compare_label
+    ? snap.highlights.compare_label
+    : (compareLabels[dim] || compareLabels.week);
+  var highlightCards = snap && snap.highlights && safeArray(snap.highlights.cards).length
+    ? snap.highlights.cards
+    : fallbackHighlights;
+  var achievements = snap && snap.achievements && safeArray(snap.achievements.achievements).length
+    ? snap.achievements.achievements
+    : fallbackAchievements;
+  var platformBreakdown = snap && snap.charts && safeArray(snap.charts.platform_breakdown).length
+    ? snap.charts.platform_breakdown
+    : fallbackPlatformData;
+  var interactionBreakdown = snap && snap.charts && safeArray(snap.charts.interaction_breakdown).length
+    ? snap.charts.interaction_breakdown
+    : fallbackInteractionData;
+  var miniStats = snap && snap.charts && snap.charts.mini_stats ? snap.charts.mini_stats : {};
+  var accountTotals = snap && ((snap as any).account_totals || (snap.aggs && snap.aggs.account_totals)) ? ((snap as any).account_totals || snap.aggs.account_totals) : {};
+
+  var execCard = findCard(highlightCards, ['exec', 'execution', 'executions', 'total_executions', 'task', 'tasks', '任务', 'success'], false);
+  var runtimeCard = findCard(highlightCards, ['runtime', 'duration', 'hours', '时长'], false);
+  var costCard = findCard(highlightCards, ['credit', 'credits', 'cost', 'token', '豆'], false);
+  var reachCard = findCard(highlightCards, ['reach', 'impression', 'impressions', '触达'], false);
+  var trendCard = findCard(highlightCards, ['exec', 'execution', 'executions', 'task', 'tasks', 'success'], true);
+  if (!trendCard) trendCard = findCard(highlightCards, ['reach', 'impression', '触达'], true);
+  if (!trendCard) trendCard = findCard(highlightCards, [], true);
+
+  var execValue = miniStats && (miniStats.exec ?? miniStats.executions ?? miniStats.total_executions);
+  if (execValue == null) execValue = execCard && execCard.value;
+  if (execValue == null) execValue = accountTotals && (accountTotals.success_count ?? accountTotals.exec ?? accountTotals.total_executions);
+
+  var runtimeValue = miniStats && (miniStats.runtime ?? miniStats.total_duration ?? miniStats.total_duration_hours);
+  if (runtimeValue == null) runtimeValue = runtimeCard && runtimeCard.value;
+  if (runtimeValue == null && fallbackTrendData && fallbackTrendData.statRuntime) runtimeValue = fallbackTrendData.statRuntime;
+
+  var costValue = miniStats && (miniStats.cost ?? miniStats.credits ?? miniStats.token_used);
+  if (costValue == null) costValue = costCard && costCard.value;
+  if (costValue == null) costValue = accountTotals && (accountTotals.token_used ?? accountTotals.credits);
+
+  var reachValue = reachCard && reachCard.value;
+  if (reachValue == null) reachValue = accountTotals && accountTotals.reach;
+
+  var execChange = getCardChange(execCard);
+  if (execChange == null && fallbackTrendData && fallbackTrendData.execChange != null) execChange = asNumber(fallbackTrendData.execChange);
+  var runtimeChange = getCardChange(runtimeCard);
+  var costChange = getCardChange(costCard);
+  if (costChange == null && fallbackTrendData && fallbackTrendData.costWow != null) costChange = asNumber(fallbackTrendData.costWow);
+  var reachChange = getCardChange(reachCard);
+  if (reachChange == null && fallbackTrendData && fallbackTrendData.reachChange != null) reachChange = asNumber(fallbackTrendData.reachChange);
+  var execPrev = execCard ? asNumber(execCard.prev) : derivePrevFromChange(execValue, execChange);
+  var runtimePrev = runtimeCard ? asNumber(runtimeCard.prev) : derivePrevFromChange(runtimeValue, runtimeChange);
+  var costPrev = costCard ? asNumber(costCard.prev) : derivePrevFromChange(costValue, costChange);
+
+  var trendLabels = trendCard && trendCard.series && safeArray(trendCard.series.labels).length
+    ? safeArray(trendCard.series.labels)
+    : safeArray(fallbackTrendData.labels);
+  var trendValues = trendCard && trendCard.series && safeArray(trendCard.series.values).length
+    ? safeArray(trendCard.series.values)
+    : safeArray(fallbackTrendData.success || fallbackTrendData.exec || fallbackTrendData.data);
+  if (!safeArray(trendValues).length && reachCard && reachCard.series && safeArray(reachCard.series.values).length) {
+    trendLabels = safeArray(reachCard.series.labels);
+    trendValues = safeArray(reachCard.series.values);
+  }
+  if (!safeArray(trendValues).length) {
+    trendLabels = [];
+    trendValues = [];
+  }
+
+  var platformPalette = ['#2563eb', '#3b82f6', '#60a5fa', '#93c5fd', '#1d4ed8'];
+  var interactionPalette = ['#0f172a', '#2563eb', '#3b82f6', '#60a5fa', '#94a3b8'];
+  var platformDonutData = normalizeBreakdown(platformBreakdown, platformPalette);
+  var interactionDonutData = normalizeBreakdown(interactionBreakdown, interactionPalette);
+
+  var platformCaption = '暂无数据';
+  if (platformDonutData.length) {
+    var platformTotal = platformDonutData.reduce(function(sum, item) { return sum + item.value; }, 0) || 1;
+    platformCaption = platformDonutData[0].name + ' 占 ' + Math.round(platformDonutData[0].value / platformTotal * 100) + '%';
+  }
+  var interactionCaption = '暂无数据';
+  if (interactionDonutData.length) {
+    var interactionTotal = interactionDonutData.reduce(function(sum, item) { return sum + item.value; }, 0) || 1;
+    interactionCaption = interactionDonutData[0].name + ' 占 ' + Math.round(interactionDonutData[0].value / interactionTotal * 100) + '%';
+  }
+
+  var achievementCards = safeArray(achievements).slice(0, 3);
+  var achievementHTML = achievementCards.map(function(item) {
+    var compare = achievementCompareMeta(item);
+    var headline = item && (item.headline || item.text) || '本周有亮点';
+    var showCompare = !!compare.text && compare.text !== headline;
+    var theme = item && item.theme || (compare.cls === 'up' ? 'green' : compare.cls === 'down' ? 'orange' : 'blue');
+    return '<div class="achievement-tag achieve-' + esc(theme) + '">' +
+      '<div class="achieve-row1">' +
+        '<span class="achieve-emoji">' + esc(item && item.emoji || '✨') + '</span>' +
+        '<span class="achieve-headline">' + esc(headline) + '</span>' +
+        (showCompare ? '<span class="achieve-change hl-change-inline ' + compare.cls + '" style="margin:0;">' + esc(compare.text) + '</span>' : '') +
+        '<span class="achieve-detail">' + esc(item && (item.detail || item.compare || item.copy) || compareLabel + ' 表现平稳。') + '</span>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+  if (!achievementHTML) {
+    achievementHTML = '<div class="achievement-tag achieve-gold"><div class="achieve-row1"><span class="achieve-emoji">✨</span><span class="achieve-headline">暂无亮点数据</span></div></div>';
+  }
+
+  var trendCaption = renderTrendMeta(
+    asNumber(trendCard && trendCard.value),
+    asNumber(trendCard && trendCard.prev),
+    getCardChange(trendCard) != null ? getCardChange(trendCard) : execChange
+  ).text;
+
+  // 5 核心互动指标（顺序与调色板和效果总览里的 highlightGrid 对齐）
+  var keyMetricDefs = [
+    { key: 'comments', fallbackLabel: '评论数',  color: '#2563eb' },
+    { key: 'likes',    fallbackLabel: '点赞数',  color: '#3b82f6' },
+    { key: 'saves',    fallbackLabel: '收藏数',  color: '#60a5fa' },
+    { key: 'dms',      fallbackLabel: '私信数',  color: '#6366f1' },
+    { key: 'reach',    fallbackLabel: '触达量',  color: '#8b5cf6' },
+  ];
+  var keyMetricsHTML = keyMetricDefs.map(function(def) {
+    var card = findByKey(highlightCards, def.key);
+    if (!card) card = findCard(highlightCards, [def.key, def.fallbackLabel], false);
+    if (!card) card = { label: def.fallbackLabel, value: null, series: { values: [] } };
+    return keyMetricCardHTML(card, def.color);
+  }).join('');
+
+  var opsRowHTML = opsSummaryRowHTML([
+    { label: '完成任务数',    value: formatInteger(execValue),    current: execValue,    prev: execPrev },
+    { label: '累计运行时长',  value: formatRuntime(runtimeValue), current: runtimeValue, prev: runtimePrev },
+    { label: '消耗算力豆',    value: formatInteger(costValue),    current: costValue,    prev: costPrev },
+  ]);
+
+  var container = document.createElement('div');
+  container.style.cssText = 'position:fixed;left:-9999px;top:0;pointer-events:none;';
   container.innerHTML =
-    // ══════ HEADER ══════
-    '<div style="background:linear-gradient(135deg,#0c1929 0%,#172554 35%,#1e3a8a 100%);padding:48px 56px 44px;position:relative;overflow:hidden;">' +
-      // decorative elements
-      '<div style="position:absolute;top:-40px;right:-40px;width:200px;height:200px;border-radius:50%;background:rgba(59,130,246,0.12);"></div>' +
-      '<div style="position:absolute;bottom:-60px;right:120px;width:160px;height:160px;border-radius:50%;background:rgba(96,165,250,0.08);"></div>' +
-      '<div style="position:absolute;top:30px;right:200px;width:80px;height:80px;border-radius:50%;border:1px solid rgba(255,255,255,0.06);"></div>' +
-      '<div style="position:relative;z-index:1;display:flex;align-items:center;justify-content:space-between;">' +
-        '<div style="display:flex;align-items:center;gap:16px;">' +
-          '<div style="width:52px;height:52px;background:linear-gradient(135deg,#2563eb,#60a5fa);border-radius:14px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:20px;color:#fff;box-shadow:0 8px 24px rgba(37,99,235,0.5);">好</div>' +
-          '<div>' +
-            '<div style="font-size:24px;font-weight:800;color:#fff;letter-spacing:0.5px;">好麦 AI</div>' +
-            '<div style="font-size:13px;color:rgba(255,255,255,0.45);margin-top:3px;">自动化获客效果报告</div>' +
+    '<div style="width:1280px;background:#ffffff;padding:32px;box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,PingFang SC,Segoe UI,sans-serif;color:#0f172a;">' +
+      '<div style="display:flex;flex-direction:column;gap:32px;">' +
+        '<section>' +
+          '<div style="background:linear-gradient(135deg,#020617 0%,#111827 100%);border-radius:24px;padding:28px 32px;display:flex;align-items:center;justify-content:space-between;gap:24px;">' +
+            '<div style="display:flex;align-items:center;gap:16px;">' +
+              '<div style="width:56px;height:56px;border-radius:18px;background:rgba(59,130,246,0.18);border:1px solid rgba(255,255,255,0.12);display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:800;color:#ffffff;">好</div>' +
+              '<div>' +
+                '<div style="font-size:13px;font-weight:700;color:#93c5fd;letter-spacing:0.08em;">好麦 AI · ' + esc(dimLabels[dim] || dimLabels.week) + '</div>' +
+                '<div style="font-size:32px;line-height:1.15;font-weight:800;color:#ffffff;margin-top:6px;">经营效果总览</div>' +
+              '</div>' +
+            '</div>' +
+            '<div style="text-align:right;">' +
+              '<div style="font-size:13px;color:rgba(255,255,255,0.58);">统计周期</div>' +
+              '<div style="font-size:18px;font-weight:700;color:#ffffff;margin-top:6px;">' + esc(dateLabel) + '</div>' +
+            '</div>' +
           '</div>' +
-        '</div>' +
-        '<div style="text-align:right;">' +
-          '<div style="display:inline-block;padding:6px 18px;border-radius:20px;background:rgba(255,255,255,0.1);backdrop-filter:blur(4px);border:1px solid rgba(255,255,255,0.1);">' +
-            '<span style="font-size:18px;font-weight:700;color:#fff;">' + dimLabels[dim] + '</span>' +
+        '</section>' +
+
+        '<section style="display:flex;flex-direction:column;gap:18px;">' +
+          sectionHeading('关键指标') +
+          '<div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:16px;">' + keyMetricsHTML + '</div>' +
+        '</section>' +
+
+        '<section style="display:flex;flex-direction:column;gap:18px;">' +
+          sectionHeading(dim === 'day' ? '今日亮点' : dim === 'month' ? '本月亮点' : '本周亮点') +
+          '<div class="achievement-bar" style="margin-bottom:0;padding:0;">' + achievementHTML + '</div>' +
+        '</section>' +
+
+        '<section style="display:flex;flex-direction:column;gap:18px;">' +
+          sectionHeading('运营概览') +
+          opsRowHTML +
+        '</section>' +
+
+        '<section style="display:flex;flex-direction:column;gap:18px;">' +
+          sectionHeading('数据趋势') +
+          '<div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:20px;padding:24px;box-shadow:0 12px 28px rgba(15,23,42,0.05);">' +
+            '<div style="display:grid;grid-template-columns:1.5fr 1fr 1fr;gap:24px;align-items:stretch;">' +
+              '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:20px;display:flex;flex-direction:column;gap:14px;min-height:320px;">' +
+                '<div style="font-size:15px;font-weight:700;color:#0f172a;">完成任务量趋势</div>' +
+                '<div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;padding:10px;flex:1;display:flex;align-items:center;justify-content:center;">' +
+                  (safeArray(trendValues).length ? lineChartHTML(trendLabels, trendValues) : placeholderHTML('暂无数据')) +
+                '</div>' +
+                '<div style="font-size:13px;color:#64748b;line-height:1.5;">' + esc(trendCaption) + '</div>' +
+              '</div>' +
+              renderBreakdownPanel('平台分布', platformDonutData, '平台', platformCaption) +
+              renderBreakdownPanel('互动类型分布', interactionDonutData, '互动', interactionCaption) +
+            '</div>' +
           '</div>' +
-          '<div style="font-size:13px;color:rgba(255,255,255,0.5);margin-top:8px;">' + dateLabel + '</div>' +
-        '</div>' +
-      '</div>' +
-    '</div>' +
+        '</section>' +
 
-    '<div style="padding:28px 48px 40px;">' +
-
-    // ══════ ROI HERO ══════
-    '<div style="' + sectionCard + 'background:linear-gradient(135deg,#eff6ff 0%,#dbeafe 60%,#bfdbfe 100%);border:1px solid #93c5fd;padding:36px 40px;">' +
-      '<div style="display:flex;align-items:flex-start;gap:40px;">' +
-        '<div style="flex-shrink:0;">' +
-          '<div style="font-size:15px;font-weight:600;color:#475569;display:flex;align-items:center;gap:8px;margin-bottom:4px;"><span style="display:inline-block;width:3px;height:16px;background:#2563eb;border-radius:2px;"></span>投入产出比</div>' +
-          '<div style="font-size:72px;font-weight:900;line-height:1;color:#0f172a;">' + roiResult.roi.toFixed(1) + 'x</div>' +
-          '<div style="font-size:13px;color:#64748b;margin-top:8px;">每 1 元算力豆 → ' + roiResult.roi.toFixed(1) + ' 元人工价值</div>' +
-        '</div>' +
-        '<div style="flex:1;display:flex;gap:16px;">' +
-          // metric cards
-          '<div style="flex:1;background:#fff;border-radius:12px;padding:18px 20px;border-left:3px solid #2563eb;box-shadow:0 1px 3px rgba(0,0,0,0.05);">' +
-            '<div style="font-size:11px;color:#94a3b8;font-weight:500;margin-bottom:6px;">人工价值</div>' +
-            '<div style="font-size:26px;font-weight:800;color:#0f172a;">¥' + Math.round(roiResult.value).toLocaleString() + '</div>' +
+        '<section style="display:flex;flex-direction:column;gap:18px;">' +
+          sectionHeading('ROI') +
+          '<div style="background:linear-gradient(135deg, #f8fafc, #e2e8f0);opacity:0.75;border-radius:16px;padding:48px 32px;text-align:center;display:flex;align-items:center;justify-content:center;min-height:180px;">' +
+            '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;">' +
+              '<div style="font-size:2.5rem;line-height:1;">🔒</div>' +
+              '<div style="font-size:24px;font-weight:800;color:#64748b;">ROI 即将到来</div>' +
+              '<div style="font-size:14px;color:#94a3b8;">人工价值 vs 算力豆支出对比，敬请期待</div>' +
+            '</div>' +
           '</div>' +
-          '<div style="flex:1;background:#fff;border-radius:12px;padding:18px 20px;border-left:3px solid #f59e0b;box-shadow:0 1px 3px rgba(0,0,0,0.05);">' +
-            '<div style="font-size:11px;color:#94a3b8;font-weight:500;margin-bottom:6px;">算力豆支出</div>' +
-            '<div style="font-size:26px;font-weight:800;color:#0f172a;">¥' + Math.round(roiResult.cost).toLocaleString() + '</div>' +
-          '</div>' +
-          '<div style="flex:1;background:#fff;border-radius:12px;padding:18px 20px;border-left:3px solid #16a34a;box-shadow:0 1px 3px rgba(0,0,0,0.05);">' +
-            '<div style="font-size:11px;color:#94a3b8;font-weight:500;margin-bottom:6px;">净节省</div>' +
-            '<div style="font-size:26px;font-weight:800;color:#16a34a;">¥' + Math.round(roiResult.saved).toLocaleString() + '</div>' +
-            '<div style="font-size:11px;color:#16a34a;margin-top:2px;">节省 ' + roiResult.savedPct + '%</div>' +
-          '</div>' +
-        '</div>' +
+        '</section>' +
       '</div>' +
-      // breakdown pills
-      '<div style="display:flex;gap:10px;margin-top:20px;padding-top:16px;border-top:1px solid rgba(147,197,253,0.4);">' +
-        roiResult.breakdown.filter(function(b){ return b.count > 0; }).map(function(b) {
-          return '<div style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:8px;background:#fff;font-size:12px;color:#475569;box-shadow:0 1px 2px rgba(0,0,0,0.04);">' +
-            '<strong style="color:#0f172a;">' + b.label + '</strong>' + b.count + b.unit + ' × ¥' + b.unitPrice + ' = <strong style="color:#0f172a;">¥' + Math.round(b.subtotal) + '</strong></div>';
-        }).join('') +
-      '</div>' +
-    '</div>' +
-
-    // ══════ PLATFORM ROI BARS ══════
-    (roiPlatforms.length > 0 ?
-    '<div style="' + sectionCard + '">' +
-      '<div style="' + sectionTitle + '"><div style="' + sectionDot + '"></div>各平台投入产出</div>' +
-      svgPlatformBars() +
-    '</div>' : '') +
-
-    // ══════ HIGHLIGHT METRICS ══════
-    '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:20px;">' +
-      hl.slice(0,3).map(function(h, idx) {
-        var ch = computeChange(h.value, h.prev);
-        var dv = formatValue(h);
-        var icons = ['<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
-          '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>',
-          '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'];
-        var borderColors = ['#2563eb','#3b82f6','#60a5fa'];
-        return '<div style="' + sectionCard + 'padding:22px 24px;border-left:3px solid ' + borderColors[idx] + ';">' +
-          '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">' + icons[idx] + '<span style="font-size:12px;color:#64748b;font-weight:500;">' + h.label + '</span></div>' +
-          '<div style="font-size:36px;font-weight:800;line-height:1.1;color:#0f172a;">' + dv + '</div>' +
-          (ch.text ? '<div style="font-size:12px;color:' + (ch.up ? '#16a34a' : '#ef4444') + ';margin-top:8px;font-weight:600;">' + (ch.up ? '↑' : '↓') + ' ' + ch.text + ' 环比</div>' : '') +
-        '</div>';
-      }).join('') +
-    '</div>' +
-
-    // ══════ DONUTS SIDE BY SIDE ══════
-    '<div style="display:flex;gap:16px;margin-bottom:20px;">' +
-      '<div style="flex:1;' + sectionCard + '">' +
-        '<div style="' + sectionTitle + '"><div style="' + sectionDot + '"></div>平台触达分布</div>' +
-        '<div style="display:flex;align-items:center;gap:24px;">' +
-          svgDonutPro(platformData, 200, '总触达') +
-          '<div style="flex:1;">' + legendPro(platformData) + '</div>' +
-        '</div>' +
-      '</div>' +
-      '<div style="flex:1;' + sectionCard + '">' +
-        '<div style="' + sectionTitle + '"><div style="' + sectionDot + '"></div>互动类型分布</div>' +
-        '<div style="display:flex;align-items:center;gap:24px;">' +
-          svgDonutPro(interactionData, 200, '总互动') +
-          '<div style="flex:1;">' + legendPro(interactionData) + '</div>' +
-        '</div>' +
-      '</div>' +
-    '</div>' +
-
-    // ══════ TREND LINE CHART ══════
-    '<div style="' + sectionCard + '">' +
-      '<div style="' + sectionTitle + '"><div style="' + sectionDot + '"></div>任务完成趋势</div>' +
-      svgLine(chartData.labels, chartData.data || chartData.success, '#1d4ed8', 1100, 220) +
-    '</div>' +
-
-    // ══════ ACHIEVEMENTS ══════
-    (achievements.length > 0 ?
-    '<div style="' + sectionCard + '">' +
-      '<div style="' + sectionTitle + '"><div style="' + sectionDot + '"></div>成果亮点</div>' +
-      '<div style="display:flex;gap:12px;flex-wrap:wrap;">' +
-        achievements.map(function(a) {
-          var bgMap = { gold:'#fffbeb', green:'#f0fdf4', purple:'#eff6ff', blue:'#eff6ff', orange:'#fff7ed' };
-          var borderMap = { gold:'#fbbf24', green:'#22c55e', purple:'#3b82f6', blue:'#3b82f6', orange:'#f97316' };
-          var colorMap = { gold:'#92400e', green:'#166534', purple:'#1e40af', blue:'#1e40af', orange:'#c2410c' };
-          return '<div style="display:flex;align-items:center;gap:10px;padding:12px 20px;border-radius:12px;background:' + (bgMap[a.theme]||bgMap.blue) + ';border:1px solid ' + (borderMap[a.theme]||borderMap.blue) + '22;font-size:13px;font-weight:600;color:' + (colorMap[a.theme]||colorMap.blue) + ';">' +
-            '<span style="font-size:18px;">' + a.emoji + '</span>' + a.text +
-          '</div>';
-        }).join('') +
-      '</div>' +
-    '</div>' : '') +
-
-    // ══════ FOOTER ══════
-    '<div style="margin-top:8px;padding-top:20px;border-top:1px solid #e2e8f0;">' +
-      '<div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:8px;">' +
-        '<div style="width:24px;height:24px;background:linear-gradient(135deg,#2563eb,#60a5fa);border-radius:6px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:10px;color:#fff;">好</div>' +
-        '<span style="font-size:13px;font-weight:600;color:#64748b;">好麦 AI · ' + dimLabels[dim] + '</span>' +
-      '</div>' +
-      '<div style="text-align:center;font-size:11px;color:#94a3b8;">报告生成于 ' + genTime + ' · 数据仅供参考，以实际结算为准</div>' +
-    '</div>' +
-
     '</div>';
   return container;
 }
 
 export async function generateReport() {
-  var btn = document.getElementById('reportFab');
+  var btn = document.getElementById('reportFab') as HTMLButtonElement | null;
   if (!btn) return;
-  var origHTML = btn.innerHTML;
-  btn.innerHTML = '⏳ 生成中...';
-  btn.style.pointerEvents = 'none';
+  btn.classList.add('loading');
+  btn.disabled = true;
   try {
-    var container = buildReportHTML(currentReportDim);
+    var container = await buildReportHTML(currentReportDim);
     document.body.appendChild(container);
-    var canvas = await html2canvas(container, { scale: 2, useCORS: true, backgroundColor: null, logging: false });
-    container.remove();
-    canvas.toBlob(function(blob) {
-      currentReportBlob = blob;
-      var url = URL.createObjectURL(blob);
-      document.getElementById('reportPreviewImg').src = url;
-      document.getElementById('reportOverlay').classList.add('open');
-    }, 'image/png');
+    var canvas;
+    try {
+      canvas = await html2canvas(container, { scale: 2, useCORS: true, backgroundColor: null, logging: false });
+    } finally {
+      container.remove();
+    }
+    var blob = await new Promise<Blob>(function(resolve, reject) {
+      canvas.toBlob(function(nextBlob) {
+        if (nextBlob) {
+          resolve(nextBlob);
+          return;
+        }
+        reject(new Error('生成图片失败'));
+      }, 'image/png');
+    });
+    currentReportBlob = blob;
+    var url = URL.createObjectURL(blob);
+    var previewImg = document.getElementById('reportPreviewImg') as HTMLImageElement | null;
+    if (previewImg) previewImg.src = url;
+    var overlay = document.getElementById('reportOverlay');
+    if (overlay) overlay.classList.add('open');
+    var panel = document.querySelector('#reportOverlay .report-container') as HTMLElement | null;
+    if (panel) {
+      panel.classList.remove('report-panel');
+      void panel.offsetHeight;
+      panel.classList.add('report-panel');
+    }
+    var wrap = document.querySelector('#reportOverlay .report-body') as HTMLElement | null;
+    if (wrap && wrap.id !== 'reportContent') wrap.id = 'reportContent';
   } catch(e) {
-    alert('生成失败：' + e.message);
+    var message = e instanceof Error ? e.message : String(e);
+    alert('生成失败：' + message);
   } finally {
-    btn.innerHTML = origHTML;
-    btn.style.pointerEvents = '';
+    btn.classList.remove('loading');
+    btn.disabled = false;
   }
 }
 
@@ -424,86 +815,58 @@ export function saveReportImage() {
   URL.revokeObjectURL(url);
 }
 
-export function renderROIPlatformCard(range?) {
-  var r = range || '7d';
-  var platforms = calcROIPlatforms(r).filter(function(p) { return p.comments + p.dms + p.likes + p.saves > 0; });
+export function renderROIPlatformCard(_range?) {
   var container = document.getElementById('roiPlatformCard');
   if (!container) return;
-  if (!platforms.length) { container.style.display = 'none'; return; }
-  container.style.display = '';
-  var roiTotal = calcROI(r);
-  container.innerHTML =
-    '<div class="card-header"><div><div class="card-title">ROI 分平台明细</div><div class="card-desc">各平台投入产出对比</div></div></div>' +
-    '<div class="card-body">' +
-      '<div class="roi-platform-chart"><canvas id="roiPlatformCanvas"></canvas></div>' +
-      '<div class="roi-platform-summary" id="roiPlatformSummary"></div>' +
-    '</div>';
-  var canvas = document.getElementById('roiPlatformCanvas') as HTMLCanvasElement;
-  if (!canvas) return;
-  var labels = platforms.map(function(p) { return p.name; });
-  var values = platforms.map(function(p) { return Math.round(p.value); });
-  var costs = platforms.map(function(p) { return Math.round(p.cost); });
-  var rois = platforms.map(function(p) { return p.roi; });
-  var colors = platforms.map(function(p) { return platformColors[p.name] || '#2563eb'; });
-  var costColors = colors.map(function(c) { return c + '55'; });
-  if (roiPlatformChart) roiPlatformChart.destroy();
-  roiPlatformChart = new Chart(canvas, {
-    type: 'bar',
-    data: {
-      labels: labels,
-      datasets: [
-        { label: '人工价值 (¥)', data: values, backgroundColor: colors, borderRadius: 6, barPercentage: 0.7, categoryPercentage: 0.6 },
-        { label: '算力豆支出 (¥)', data: costs, backgroundColor: costColors, borderRadius: 6, barPercentage: 0.7, categoryPercentage: 0.6 },
-        { label: 'ROI', type: 'line', data: rois, borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,0.08)', pointBackgroundColor: '#2563eb', pointBorderColor: '#fff', pointBorderWidth: 2, pointRadius: 7, pointHoverRadius: 9, borderWidth: 2.5, fill: false, yAxisID: 'yROI', tension: 0.3 } as any,
-      ]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: {
-        legend: { display: true, position: 'top', labels: { usePointStyle: true, padding: 16, font: { size: 12 } } },
-        tooltip: {
-          backgroundColor: 'rgba(9,9,11,0.9)', titleFont: { size: 13 }, bodyFont: { size: 12 }, padding: 10, cornerRadius: 8,
-          callbacks: { label: function(ctx) { if (ctx.dataset.label === 'ROI') return ' ROI: ' + ctx.parsed.y.toFixed(1) + 'x'; return ' ' + ctx.dataset.label.replace(/ \(¥\)/, '') + ': ¥' + ctx.parsed.y; } }
-        }
-      },
-      scales: {
-        x: { grid: { display: false }, ticks: { font: { size: 13, weight: '500' }, color: '#52525b' } },
-        y: { position: 'left', grid: { color: '#f4f4f5' }, ticks: { font: { size: 11 }, color: '#a1a1aa', callback: function(v) { return '¥' + v; } }, beginAtZero: true },
-        yROI: { position: 'right', grid: { display: false }, ticks: { font: { size: 11, weight: '600' }, color: '#2563eb', callback: function(v) { return v.toFixed(1) + 'x'; } }, beginAtZero: true, suggestedMax: 4 }
-      }
-    }
-  });
-  var summaryEl = document.getElementById('roiPlatformSummary');
-  if (summaryEl) {
-    summaryEl.innerHTML =
-      '<div class="roi-summary-item"><span class="roi-summary-label">总人工价值</span><span class="roi-summary-value">¥' + Math.round(roiTotal.value) + '</span></div>' +
-      '<div class="roi-summary-item"><span class="roi-summary-label">总算力豆支出</span><span class="roi-summary-value">¥' + Math.round(roiTotal.cost) + '</span></div>' +
-      '<div class="roi-summary-item"><span class="roi-summary-label">综合 ROI</span><span class="roi-summary-value" style="color:#2563eb;font-weight:700;">' + roiTotal.roi.toFixed(1) + 'x</span></div>' +
-      '<div class="roi-summary-item"><span class="roi-summary-label">净节省</span><span class="roi-summary-value" style="color:#16a34a;">¥' + Math.round(roiTotal.saved) + '</span></div>';
+  if (roiPlatformChart) {
+    roiPlatformChart.destroy();
+    roiPlatformChart = null;
   }
+  container.style.display = 'none';
 }
 
 export async function switchReportDim(dim, btn) {
   currentReportDim = dim;
   btn.parentElement.querySelectorAll('.report-dim-btn').forEach(function(b) { b.classList.remove('active'); });
   btn.classList.add('active');
-  var saveBtn = document.getElementById('reportSaveBtn');
+  var saveBtn = document.getElementById('reportSaveBtn') as HTMLButtonElement | null;
+  if (!saveBtn) return;
   saveBtn.textContent = '生成中...';
   saveBtn.disabled = true;
   try {
-    var container = buildReportHTML(dim);
+    var container = await buildReportHTML(dim);
     document.body.appendChild(container);
-    var canvas = await html2canvas(container, { scale: 2, useCORS: true, backgroundColor: null, logging: false });
-    container.remove();
-    canvas.toBlob(function(blob) {
-      currentReportBlob = blob;
-      var url = URL.createObjectURL(currentReportBlob);
-      document.getElementById('reportPreviewImg').src = url;
-      saveBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 保存图片';
-      saveBtn.disabled = false;
-    }, 'image/png');
+    var canvas;
+    try {
+      canvas = await html2canvas(container, { scale: 2, useCORS: true, backgroundColor: null, logging: false });
+    } finally {
+      container.remove();
+    }
+    var blob = await new Promise<Blob>(function(resolve, reject) {
+      canvas.toBlob(function(nextBlob) {
+        if (nextBlob) {
+          resolve(nextBlob);
+          return;
+        }
+        reject(new Error('生成图片失败'));
+      }, 'image/png');
+    });
+    currentReportBlob = blob;
+    var url = URL.createObjectURL(currentReportBlob);
+    var previewImg = document.getElementById('reportPreviewImg') as HTMLImageElement | null;
+    if (previewImg) previewImg.src = url;
+    saveBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 保存图片';
+    var wrap = document.querySelector('#reportOverlay .report-body') as HTMLElement | null;
+    if (wrap && wrap.id !== 'reportContent') wrap.id = 'reportContent';
+    wrap = document.getElementById('reportContent');
+    if (wrap) {
+      wrap.classList.remove('report-content-enter');
+      void wrap.offsetHeight;
+      wrap.classList.add('report-content-enter');
+    }
   } catch(e) {
     saveBtn.textContent = '生成失败';
+  } finally {
     saveBtn.disabled = false;
   }
 }

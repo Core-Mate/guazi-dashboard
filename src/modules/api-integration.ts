@@ -1,14 +1,234 @@
-import { fetchOverview, fetchTrend, fetchCredits, fetchMembers, fetchWallet, fetchTransactions, fetchAccounts, fetchSkills, isApiAvailable } from '../data/api'
+import {
+  fetchTrend as apiFetchTrend,
+  fetchWallet as apiFetchWallet,
+  fetchAccounts as apiFetchAccounts,
+  fetchSkills as apiFetchSkills,
+} from '../data/api'
 import { renderHighlightCards } from './charts'
 import { renderMembers } from './members'
 import { renderTransactions } from './records'
-import { renderAccountMetricsTable } from './accounts'
+import { renderAccountAcquireGroup } from './accounts'
 import { renderScenarioCards, renderScenarioCardsFull } from './scenarios'
 import { membersData } from '../data/members'
-import { replaceTransactionData } from '../data/records'
 import { replaceSkillData } from '../data/scenarios'
 import { accountList } from '../data/accounts'
-import { animateAllNumbers } from './utils'
+import { fmtHM } from '../data/helpers'
+import { rebuildCustomDropdown } from './dropdown'
+
+export interface HighlightCard {
+  key: string;
+  label: string;
+  value: number;
+  prev: number;
+  change_pct: number;
+  unit: string;
+  series: { labels: string[]; values: number[] };
+  stats: { avg: number; peak: number };
+  sparkline?: number[];
+}
+
+export interface DashboardSnapshot {
+  highlights: { range: string; compare_label: string; cards: HighlightCard[] };
+  achievements: { range: string; compare_label: string; achievements: any[] };
+  aggs: {
+    accounts: any[];
+    account_totals?: any;
+    skill_groups: any[];
+    devices: any[];
+    device_heat?: any[];
+    device_alert_count?: number;
+    totals?: any;
+  };
+  charts: {
+    platform_breakdown: any[];
+    interaction_breakdown: any[];
+    mini_stats: any;
+    roi: any;
+  };
+  ops_trend?: {
+    labels: any[];
+    dates?: any[];
+    exec: any[];
+    success: any[];
+    failed?: any[];
+    total?: any[];
+    cost: any[];
+    reach: any[];
+    comments: any[];
+    likes: any[];
+    saves: any[];
+    dms: any[];
+    runtime: any[];
+  };
+  aggregations?: {
+    accounts: any[];
+    skill_groups: any[];
+    devices: any[];
+    totals: any;
+  };
+}
+
+var SNAPSHOT_CACHE_TTL = 30000;
+var snapshotCache: Record<string, { expiresAt: number; data?: DashboardSnapshot; pending?: Promise<DashboardSnapshot> }> = {};
+var EMPTY_OPS_DATA = {
+  dates: [],
+  success: [],
+  failed: [],
+  total: [],
+  comments: [],
+  likes: [],
+  dms: [],
+  reach: [],
+  runtime: [],
+  saves: [],
+  cost: [],
+  credits: [],
+};
+
+export const EMPTY_SNAPSHOT: DashboardSnapshot = {
+  highlights: {
+    range: '',
+    compare_label: '',
+    cards: [],
+  },
+  achievements: {
+    range: '',
+    compare_label: '较上周',
+    achievements: [],
+  },
+  aggs: {
+    accounts: [],
+    account_totals: {},
+    skill_groups: [],
+    devices: [],
+    device_heat: [],
+    device_alert_count: 0,
+    totals: {},
+  },
+  charts: {
+    platform_breakdown: [],
+    interaction_breakdown: [],
+    mini_stats: { exec: 0, runtime: '', cost: 0 },
+    roi: { value: 0, cost: 0, roi: 0, saved: 0, saved_pct: 0, breakdown: [] },
+  },
+  ops_trend: {
+    labels: [],
+    dates: [],
+    exec: [],
+    success: [],
+    failed: [],
+    total: [],
+    cost: [],
+    reach: [],
+    comments: [],
+    likes: [],
+    saves: [],
+    dms: [],
+    runtime: [],
+  },
+  aggregations: {
+    accounts: [],
+    skill_groups: [],
+    devices: [],
+    totals: {},
+  },
+};
+
+function cloneSnapshot(snapshot: DashboardSnapshot): DashboardSnapshot {
+  return JSON.parse(JSON.stringify(snapshot));
+}
+
+function snapshotCacheKey(range: string, custom?: { start?: string; end?: string }) {
+  return range + '|' + (custom && custom.start || '') + '|' + (custom && custom.end || '');
+}
+
+function clearDashboardError() {
+  var banner = document.querySelector('.dashboard-error-banner');
+  if (banner) banner.remove();
+}
+
+export function showDashboardError(msg: string) {
+  var banner = document.querySelector('.dashboard-error-banner') as HTMLDivElement | null;
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.className = 'dashboard-error-banner';
+    var text = document.createElement('span');
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = '重试';
+    button.onclick = function() {
+      location.reload();
+    };
+    banner.appendChild(text);
+    banner.appendChild(button);
+    var host = document.querySelector('.main') || document.querySelector('main') || document.body;
+    host.prepend(banner);
+  }
+  var textEl = banner.querySelector('span');
+  if (textEl) textEl.textContent = msg;
+}
+
+function getDashboardApiKey() {
+  try {
+    return localStorage.getItem('dashboardApiKey') || 'dev-key-guazi-2026';
+  } catch {
+    return 'dev-key-guazi-2026';
+  }
+}
+
+export function getDashboardTenantId() {
+  var keys = ['dashboardTenantId', 'tenant_id', 'tenantId']
+  for (var i = 0; i < keys.length; i++) {
+    try {
+      var localValue = localStorage.getItem(keys[i])
+      if (localValue) return localValue
+    } catch {}
+    try {
+      var sessionValue = sessionStorage.getItem(keys[i])
+      if (sessionValue) return sessionValue
+    } catch {}
+  }
+  return ''
+}
+
+function resolveTenantId(tenantId?: string) {
+  return String(tenantId || getDashboardTenantId() || '').trim()
+}
+
+function withTenantQuery(query?: URLSearchParams, tenantId?: string) {
+  var params = query || new URLSearchParams()
+  var resolvedTenantId = resolveTenantId(tenantId)
+  if (resolvedTenantId) params.set('tenant_id', resolvedTenantId)
+  return params
+}
+
+function buildDashboardUrl(path: string, query?: URLSearchParams, tenantId?: string) {
+  var params = withTenantQuery(query, tenantId)
+  var text = params.toString()
+  return text ? path + '?' + text : path
+}
+
+async function fetchDashboardJSON<T>(
+  path: string,
+  errorPrefix: string,
+  query?: URLSearchParams,
+  tenantId?: string
+): Promise<T | null> {
+  try {
+    var resp = await fetch(buildDashboardUrl(path, query, tenantId), {
+      headers: { 'X-API-Key': getDashboardApiKey() },
+    })
+    if (!resp.ok) {
+      showDashboardError(errorPrefix + '：HTTP ' + resp.status)
+      return null
+    }
+    clearDashboardError()
+    return await resp.json()
+  } catch {
+    showDashboardError(errorPrefix + '：网络错误')
+    return null
+  }
+}
 
 function rangeToDays(range: string): number {
   if (range === 'today') return 1;
@@ -17,96 +237,236 @@ function rangeToDays(range: string): number {
   return 7;
 }
 
-function showLiveBadge(live: boolean) {
-  var el = document.getElementById('dataBadge');
-  if (!el) {
-    var toolbar = document.querySelector('#page-dashboard .toolbar');
-    if (!toolbar) return;
-    el = document.createElement('span');
-    el.id = 'dataBadge';
-    el.className = 'data-badge';
-    toolbar.appendChild(el);
+export async function fetchDashboardData(
+  range: string,
+  custom?: { start?: string; end?: string }
+): Promise<DashboardSnapshot> {
+  var key = snapshotCacheKey(range, custom);
+  var now = Date.now();
+  var cached = snapshotCache[key];
+  if (cached && cached.data && cached.expiresAt > now) {
+    return cloneSnapshot(cached.data);
   }
-  el.textContent = live ? '● Live Data' : '● Demo';
-  el.className = 'data-badge ' + (live ? 'data-badge-live' : 'data-badge-demo');
+  if (cached && cached.pending) {
+    return cached.pending.then(cloneSnapshot);
+  }
+
+  var pending = (async function() {
+    try {
+      var query = withTenantQuery(new URLSearchParams({ range: range }))
+      if (custom && custom.start) {
+        query.set('start', custom.start)
+        query.set('end', custom.end || '')
+      }
+      var url = '/api/dashboard/snapshot?' + query.toString();
+      var res = await fetch(url, {
+        headers: { 'X-API-Key': getDashboardApiKey() },
+      });
+      if (!res.ok) {
+        delete snapshotCache[key];
+        showDashboardError('数据加载失败：HTTP ' + res.status);
+        return cloneSnapshot(EMPTY_SNAPSHOT);
+      }
+      var data = await res.json();
+      clearDashboardError();
+      snapshotCache[key] = { expiresAt: Date.now() + SNAPSHOT_CACHE_TTL, data: data };
+      return cloneSnapshot(data);
+    } catch {
+      delete snapshotCache[key];
+      showDashboardError('数据加载失败：网络错误');
+      return cloneSnapshot(EMPTY_SNAPSHOT);
+    }
+  })();
+
+  snapshotCache[key] = { expiresAt: 0, pending: pending };
+  return pending;
+}
+
+function padRecordNumber(value: number) {
+  return String(value).padStart(2, '0');
+}
+
+function formatRecordTime(value?: string | null) {
+  if (!value) return '';
+  var date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return padRecordNumber(date.getMonth() + 1) + '/' + padRecordNumber(date.getDate()) + ' '
+    + padRecordNumber(date.getHours()) + ':' + padRecordNumber(date.getMinutes());
+}
+
+function appendAuditRemark(base: string, remark: any) {
+  var text = String(remark || '').trim();
+  return text ? base + '（' + text + '）' : base;
+}
+
+function normalizeTransactionType(changeType: any) {
+  var type = String(changeType || '').toUpperCase();
+  if (type === 'CONSUME') return '消耗';
+  if (type === 'RECHARGE') return '充值';
+  if (type === 'DISTRIBUTE') return '分发';
+  if (type === 'DEDUCT') return '扣减';
+  if (type === 'GIFT') return '赠送';
+  if (type === 'CHECKIN' || type === 'SIGNIN') return '签到';
+  return String(changeType || '未知');
+}
+
+function normalizeTransactionDesc(item: any) {
+  if (item.change_type === 'CONSUME') {
+    var taskName = item.task_name || '任务消耗';
+    var callCount = Number(item.call_count || 0);
+    return callCount > 1 ? taskName + '（' + callCount + '次调用）' : taskName;
+  }
+  if (item.task_name) return String(item.task_name);
+  if (item.change_type === 'RECHARGE') return '账户充值';
+  if (item.change_type === 'DISTRIBUTE') return '分发算力豆';
+  if (item.change_type === 'DEDUCT') return '扣减算力豆';
+  return String(item.change_type || '—');
+}
+
+function normalizeTransactions(data: any): { items: any[]; total: number } {
+  var rawItems = Array.isArray(data && data.items) ? data.items : [];
+  return {
+    items: rawItems.map(function(item) {
+      return {
+        id: item.task_exec_id || [item.username, item.change_type, item.ended_at, item.total_change].join('_'),
+        time: formatRecordTime(item.ended_at || item.started_at),
+        member: item.username || '系统',
+        type: normalizeTransactionType(item.change_type),
+        desc: normalizeTransactionDesc(item),
+        change: Number(item.total_change || 0),
+        balance: Number(item.balance_after || 0),
+        raw: item,
+      };
+    }),
+    total: Number(data && data.total) || rawItems.length,
+  };
+}
+
+function normalizeAuditAction(action: any) {
+  var value = String(action || '').toUpperCase();
+  if (value === 'TRANSFER_CREDITS') return '分发算力豆';
+  if (value === 'MEMBER_UPDATE') return '编辑成员';
+  if (value === 'REMOVE_MEMBER') return '删除成员';
+  if (value === 'ADD_MEMBER') return '新增成员';
+  return String(action || '操作记录');
+}
+
+function normalizeAuditTarget(item: any, action: string) {
+  var targetName = item.target_user_name || '未知成员';
+  var creditsAmount = Math.round(Number(item.credits_amount || 0));
+  if (action === '分发算力豆') {
+    var base = '分发 ' + creditsAmount.toLocaleString() + ' 算力豆给 ' + targetName;
+    return appendAuditRemark(base, item.remark);
+  }
+  if (action === '新增成员') {
+    var addText = '添加成员 ' + targetName;
+    if (creditsAmount > 0) addText += '，初始余额 ' + creditsAmount.toLocaleString() + ' 算力豆';
+    return appendAuditRemark(addText, item.remark);
+  }
+  if (action === '删除成员') return appendAuditRemark('移除成员 ' + targetName, item.remark);
+  if (action === '编辑成员') return appendAuditRemark('编辑成员 ' + targetName, item.remark);
+  return appendAuditRemark(targetName, item.remark);
+}
+
+function normalizeAuditResult(action: string) {
+  if (action === '新增成员') return '已加入团队';
+  if (action === '删除成员') return '已移除';
+  if (action === '编辑成员') return '已更新';
+  return '已完成';
+}
+
+function normalizeAuditLog(data: any): { items: any[]; total: number } {
+  var rawItems = Array.isArray(data && data.items) ? data.items : [];
+  return {
+    items: rawItems.map(function(item) {
+      var action = normalizeAuditAction(item.action);
+      return {
+        id: item.id,
+        time: formatRecordTime(item.created_at),
+        operator: item.operator_name || '系统',
+        action: action,
+        target: normalizeAuditTarget(item, action),
+        result: normalizeAuditResult(action),
+        raw: item,
+      };
+    }),
+    total: Number(data && data.total) || rawItems.length,
+  };
+}
+
+export async function fetchAuditLog(page: number, pageSize: number, tenantId?: string): Promise<{ items: any[]; total: number }> {
+  var query = new URLSearchParams({
+    page: String(Math.max(1, page || 1)),
+    page_size: String(Math.max(1, Math.min(pageSize || 20, 100))),
+  })
+  var data = await fetchDashboardJSON<any>('/api/audit-log', '操作日志加载失败', query, tenantId)
+  return data ? normalizeAuditLog(data) : { items: [], total: 0 }
+}
+
+export async function fetchTransactions(page: number, pageSize: number, tenantId?: string): Promise<{ items: any[]; total: number }> {
+  var query = new URLSearchParams({
+    page: String(Math.max(1, page || 1)),
+    page_size: String(Math.max(1, Math.min(pageSize || 20, 100))),
+  })
+  var data = await fetchDashboardJSON<any>('/api/transactions', '交易记录加载失败', query, tenantId)
+  return data ? normalizeTransactions(data) : { items: [], total: 0 }
+}
+
+export async function fetchMembers(tenantId?: string): Promise<any[]> {
+  var data = await fetchDashboardJSON<any[]>('/api/members', '成员数据加载失败', undefined, tenantId)
+  return Array.isArray(data) ? data : []
+}
+
+export async function fetchTaskSummaries(tenantId?: string): Promise<any[]> {
+  var data = await fetchDashboardJSON<any[]>('/api/stats/tasks', '任务数据加载失败', undefined, tenantId)
+  return Array.isArray(data) ? data : []
 }
 
 export async function tryLiveHighlights(range: string) {
-  var available = await isApiAvailable();
-  showLiveBadge(available);
-  if (!available) return;
-
-  var days = rangeToDays(range);
-  var [overview, trend, credits] = await Promise.all([
-    fetchOverview(days),
-    fetchTrend(days),
-    fetchCredits(days),
-  ]);
-  if (!overview) return;
-
-  var trendSparkline = trend ? trend.total : [];
-  var successSparkline = trend ? trend.success : [];
-  var creditSparkline = credits ? credits.consumed.map(v => Math.abs(v)) : [];
-
-  var successRate = overview.total_executions > 0
-    ? Math.round(overview.success_count / overview.total_executions * 100)
-    : 0;
-
-  var cards = [
-    {
-      key: 'tasks',
-      label: '执行数量',
-      value: overview.total_executions,
-      prev: Math.round(overview.total_executions * 0.85),
-      unit: '',
-      sparkline: trendSparkline,
-    },
-    {
-      key: 'runtime',
-      label: '执行时长',
-      value: trend ? trend.total.reduce((a, b) => a + b, 0) * 0.8 : 0,
-      prev: trend ? trend.total.reduce((a, b) => a + b, 0) * 0.7 : 0,
-      unit: 'h',
-      sparkline: trendSparkline,
-    },
-    {
-      key: 'credits',
-      label: '算力豆消耗',
-      value: Math.round(Math.abs(overview.total_credits_consumed)),
-      prev: Math.round(Math.abs(overview.total_credits_consumed) * 0.9),
-      unit: '',
-      sparkline: creditSparkline,
-    },
-  ];
-
-  renderHighlightCards(cards, range);
-  animateAllNumbers();
+  var snap = await fetchDashboardData(range);
+  renderHighlightCards(snap.highlights.cards, range);
 }
 
-export async function tryLiveOpsData(range: string) {
-  var available = await isApiAvailable();
-  if (!available) return null;
-
+export async function tryLiveOpsData(range: string, custom?: { start: string; end: string }) {
   var days = rangeToDays(range);
-  var trend = await fetchTrend(days);
-  if (!trend) return null;
+  if (range === 'custom' && custom) {
+    var start = new Date(custom.start);
+    var end = new Date(custom.end);
+    if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
+      days = Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
+      days = Math.max(1, Math.min(90, days));
+    }
+  }
+  var trend = await apiFetchTrend(days);
+  if (!trend) {
+    return Object.assign({}, EMPTY_OPS_DATA);
+  }
+  var dates = trend.dates && trend.dates.length ? trend.dates : [];
+  var success = trend.success && trend.success.length ? trend.success : [];
+  var failed = trend.failed && trend.failed.length ? trend.failed : [];
+  var total = trend.total && trend.total.length ? trend.total : [];
+  var comments = trend.comments && trend.comments.length ? trend.comments : [];
+  var likes = trend.likes && trend.likes.length ? trend.likes : [];
+  var dms = trend.dms && trend.dms.length ? trend.dms : [];
+  var reach = trend.reach && trend.reach.length ? trend.reach : [];
+  var runtime = trend.runtime && trend.runtime.length ? trend.runtime : [];
 
   return {
-    labels: trend.dates.map(d => d.slice(5).replace('-', '/')),
-    success: trend.success,
-    failed: trend.failed,
-    total: trend.total,
+    dates: dates,
+    success: success,
+    failed: failed,
+    total: total,
+    comments: comments,
+    likes: likes,
+    dms: dms,
+    reach: reach,
+    runtime: runtime,
   };
 }
 
 export async function tryLiveMembers() {
-  var available = await isApiAvailable();
-  if (!available) return;
-
-  var data = await fetchMembers();
-  if (!data || !data.length) return;
-
   membersData.length = 0;
+  var data = await fetchMembers();
   data.forEach(function(m) {
     membersData.push({
       id: m.id,
@@ -118,71 +478,42 @@ export async function tryLiveMembers() {
     });
   });
   renderMembers();
+  populateMemberFilter();
 
   var countEl = document.getElementById('statMemberCount');
-  if (countEl) countEl.textContent = data.length + '人';
+  if (countEl) countEl.textContent = membersData.length + '人';
 
   var admin = membersData.find(function(m) { return m.role === 'admin'; });
+  var nameEl = document.getElementById('sidebarUserName');
+  var avatarEl = document.getElementById('sidebarAvatar');
+  var roleEl = document.getElementById('sidebarUserRole');
   if (admin) {
-    var nameEl = document.getElementById('sidebarUserName');
-    var avatarEl = document.getElementById('sidebarAvatar');
-    var roleEl = document.getElementById('sidebarUserRole');
     if (nameEl) nameEl.textContent = admin.name;
     if (avatarEl) avatarEl.textContent = admin.name.charAt(0);
     if (roleEl) roleEl.textContent = '管理员';
+  } else {
+    if (nameEl) nameEl.textContent = '未加载成员';
+    if (avatarEl) avatarEl.textContent = '—';
+    if (roleEl) roleEl.textContent = '';
   }
 }
 
 export async function tryLiveWallet() {
-  var available = await isApiAvailable();
-  if (!available) return;
-
-  var data = await fetchWallet();
+  var data = await apiFetchWallet();
   if (!data) return;
 
   var setIf = function(id, val) { var el = document.getElementById(id); if (el) el.textContent = val; };
   setIf('statWallet', Math.round(data.total_balance).toLocaleString());
   setIf('statTopup', Math.round(data.total_recharged).toLocaleString());
   setIf('statConsumed', Math.round(data.total_consumed).toLocaleString());
-  setIf('statMemberCount', data.member_count + '人');
 }
 
 export async function tryLiveTransactions() {
-  var available = await isApiAvailable();
-  if (!available) return;
-
-  var data = await fetchTransactions(1, 50);
-  if (!data || !data.items || !data.items.length) return;
-
-  var typeMap = { CONSUME: '消耗', RECHARGE: '充值', DISTRIBUTE: '分发', DEDUCT: '扣减', GIFT: '赠送' };
-  var newItems = data.items.map(function(item) {
-    var d = item.ended_at ? new Date(item.ended_at) : new Date();
-    var timeStr = (d.getMonth() + 1).toString().padStart(2, '0') + '/' + d.getDate().toString().padStart(2, '0') + ' ' + d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
-    return {
-      time: timeStr,
-      member: item.username || '系统',
-      type: typeMap[item.change_type] || item.change_type || '消耗',
-      desc: item.task_name
-        ? item.task_name + '（' + item.call_count + '次调用）'
-        : item.change_type || '—',
-      change: item.total_change,
-      balance: item.balance_after || 0,
-    };
-  });
-
-  try {
-    replaceTransactionData(newItems);
-    renderTransactions(1, 20);
-  } catch (e) {
-    console.error('[tryLiveTransactions] render failed:', e);
-  }
+  await renderTransactions(1, 20);
 }
 
 export async function tryLiveAccounts() {
-  var available = await isApiAvailable();
-  if (!available) return;
-
-  var data = await fetchAccounts();
+  var data = await apiFetchAccounts();
   if (!data || !data.length) return;
 
   accountList.length = 0;
@@ -190,9 +521,10 @@ export async function tryLiveAccounts() {
     accountList.push({
       id: 'user-' + a.id,
       name: a.username || '未知',
-      tokenUsed: a.total_tokens,
-      successCount: a.exec_count,
-      successDuration: a.duration || '0h',
+      deviceId: '',
+      tokenUsed: Math.round(a.total_credits || 0),
+      successCount: a.success_count ?? a.exec_count,
+      successDuration: typeof a.duration === 'number' ? fmtHM(a.duration) : (a.duration || '0:00'),
       comments: 0,
       likes: 0,
       saves: 0,
@@ -200,25 +532,26 @@ export async function tryLiveAccounts() {
       reach: 0,
     });
   });
-  renderAccountMetricsTable();
+  renderAccountAcquireGroup();
 }
 
 export async function tryLiveSkills() {
-  var available = await isApiAvailable();
-  if (!available) return;
-
-  var data = await fetchSkills();
+  var data = await apiFetchSkills();
   if (!data || !data.length) return;
 
   var newSkillData = data.map(function(s) {
+    var durSec = s.total_duration_sec || 0;
+    var durStr = fmtHM(durSec);
     return {
       skill: 'S' + s.id,
       skillName: s.skill_name,
+      description: s.description || '',
       exec: s.total_executions,
       success: s.success_count,
       fail: s.total_executions - s.success_count,
-      avgDur: '—',
-      tokenAvg: 0,
+      avgDur: durStr,
+      durationSec: durSec,
+      tokenAvg: Math.round(s.total_credits || 0),
       comments: 0, likes: 0, favorites: 0, dms: 0,
       profileViews: 0, uniqueReach: 0,
     };
@@ -229,9 +562,35 @@ export async function tryLiveSkills() {
   renderScenarioCardsFull();
 }
 
-function injectBetaOverlay(containerId: string, text?: string) {
+export function populateMemberFilter() {
+  var selectId = 'txMemberFilter'
+  var select = document.getElementById(selectId) as HTMLSelectElement;
+  if (!select) return;
+  var existing = select.value;
+  select.innerHTML = '<option value="">全部成员</option>';
+  membersData.forEach(function(m) {
+    var opt = document.createElement('option');
+    opt.value = m.name;
+    opt.textContent = m.name;
+    opt.dataset.phone = m.phone || '';
+    select.appendChild(opt);
+  });
+  if (existing) select.value = existing;
+  rebuildCustomDropdown(selectId, {
+    searchable: true,
+    placeholder: '搜索成员...',
+    subtitleKey: 'phone',
+  })
+  select.onchange = function() {
+    renderTransactions(1, 20);
+  };
+}
+
+export function injectBetaOverlay(containerId: string, text?: string) {
   var el = document.getElementById(containerId);
   if (!el) return;
+  var existing = el.querySelector('.beta-overlay');
+  if (existing) existing.remove();
   el.classList.add('beta-overlay-wrap');
   var overlay = document.createElement('div');
   overlay.className = 'beta-overlay';
@@ -240,10 +599,6 @@ function injectBetaOverlay(containerId: string, text?: string) {
 }
 
 export function applyBetaOverlays() {
-  injectBetaOverlay('roiHero', '互动数据即将上线');
-  injectBetaOverlay('roiPlatformCard', '平台对比即将上线');
-  injectBetaOverlay('achievementBar', '成就系统即将上线');
-  injectBetaOverlay('donutSection', '平台触达数据即将上线');
-  injectBetaOverlay('interactionSection', '互动分布数据即将上线');
-  injectBetaOverlay('deviceMetricsSection', '设备数据即将上线');
+  injectBetaOverlay('roiHero', 'ROI 即将到来');
+  injectBetaOverlay('roiPlatformCard', 'ROI 即将到来');
 }
