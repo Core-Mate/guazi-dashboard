@@ -149,7 +149,6 @@ export function renderScenarioCards() {
     }
     rows = sortScenarioRows(rows);
     var totalSuccess = rows.reduce((a,r) => a + r.success, 0);
-    var totalExec = rows.reduce((a: number, r: any) => a + (r.exec || 0), 0);
 
     var extraCols = g.extraCols || [];
     var slimCols = ['单次任务', '完成数', '算力豆', '时长 (h:m)'].concat(extraCols);
@@ -178,7 +177,6 @@ export function renderScenarioCards() {
         <div style="display:flex;align-items:center;gap:12px;">
           <div class="scenario-card-metrics">
             <span>技能数: <strong>${rows.length}</strong></span>
-            <span>执行: <strong>${totalExec}</strong></span>
             <span>成功: <strong>${totalSuccess}</strong></span>
             <span>算力豆: <strong>${rows.reduce((a,r) => a + getScenarioCredits(r), 0)}</strong></span>
           </div>
@@ -222,7 +220,6 @@ export function renderScenarioCardsFull(containerId?: string, idPrefix?: string)
     rows = sortScenarioRows(rows);
     if (!rows.length) return '';
     var totalSuccess = rows.reduce(function(a,r){ return a+r.success; }, 0);
-    var totalExec = rows.reduce(function(a: number, r: any){ return a + (r.exec || 0); }, 0);
     var commonCols = ['单次任务', '完成数', '算力豆', '时长 (h:m)'];
     var allCols = commonCols.concat(g.extraCols || []);
     var headHtml = allCols.map(function(c, i){
@@ -246,7 +243,7 @@ export function renderScenarioCardsFull(containerId?: string, idPrefix?: string)
       '<div class="scenario-card-header" onclick="toggleScenarioFull(\''+togglePrefix+g.id+'\')">' +
         '<div class="scenario-card-title"><span class="scenario-icon">'+g.icon+'</span>'+g.name+'</div>' +
         '<div style="display:flex;align-items:center;gap:12px;">' +
-          '<div class="scenario-card-metrics"><span>技能数: <strong>'+rows.length+'</strong></span><span>执行: <strong>'+totalExec+'</strong></span><span>成功: <strong>'+totalSuccess+'</strong></span><span>算力豆: <strong>'+rows.reduce((a,r) => a + getScenarioCredits(r), 0)+'</strong></span></div>' +
+          '<div class="scenario-card-metrics"><span>技能数: <strong>'+rows.length+'</strong></span><span>成功: <strong>'+totalSuccess+'</strong></span><span>算力豆: <strong>'+rows.reduce((a,r) => a + getScenarioCredits(r), 0)+'</strong></span></div>' +
           '<span class="scenario-chevron open" id="'+chevPrefix+'-'+g.id+'">&#9662;</span>' +
         '</div>' +
       '</div>' +
