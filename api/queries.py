@@ -24,6 +24,10 @@ except ImportError:  # pragma: no cover
 
 CN_TZ = timezone(timedelta(hours=8))
 
+# CANONICAL SUCCESS FILTER: execution_result = 'SUCCEED' — change only here
+def _success_filter_sql(alias: str = "te") -> str:
+    return f"{alias}.execution_result = 'SUCCEED'"
+
 
 # DB enum platformtype 实际值:
 # XIAOHONGSHU, DOUYIN, KUAISHOU, WECHAT, LARK, ZOOM,
@@ -178,7 +182,7 @@ async def _fetch_metric_buckets(
             SELECT
                 DATE_TRUNC('{trunc}', COALESCE(te.finished_at, te.started_at) AT TIME ZONE 'Asia/Shanghai') AS bucket,
                 COUNT(*)::bigint AS executions,
-                COUNT(*) FILTER (WHERE te.execution_result = 'SUCCEED')::bigint AS successes,
+                COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS successes,
                 COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
                 COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
                 COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
@@ -220,10 +224,10 @@ async def _fetch_period_totals(
 ) -> dict[str, int]:
     """单段窗口总和（用于环比 prev 段）。"""
     row = await pool.fetchrow(
-        """
+        f"""
         SELECT
             COUNT(*)::bigint AS executions,
-            COUNT(*) FILTER (WHERE te.execution_result = 'SUCCEED')::bigint AS successes,
+            COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS successes,
             COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
             COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
             COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
@@ -290,7 +294,7 @@ def _change_pct(cur: int, prev: int) -> int:
 # ────────────────────────────────────────────────────────────────
 
 CARD_DEFS = [
-    {"key": "successCount", "label": "完成数", "unit": ""},
+    {"key": "successCount", "label": "完成", "unit": ""},
     {"key": "comments", "label": "评论数", "unit": ""},
     {"key": "likes", "label": "点赞数", "unit": ""},
     {"key": "saves", "label": "收藏数", "unit": ""},
@@ -435,13 +439,13 @@ async def aggregate_aggregations(
 
     account_rows, credit_rows, skill_rows, skill_credit_rows, device_rows, device_credit_rows, heat_rows = await asyncio.gather(
         pool.fetch(
-            """
+            f"""
             SELECT u.id AS user_id,
                    u.name AS username,
                    u.role,
                    MAX(te.device_id) AS device_id,
                    COUNT(te.id)::bigint AS exec_count,
-                   COUNT(te.id) FILTER (WHERE te.execution_result = 'SUCCEED')::bigint AS success_count,
+                   COUNT(te.id) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success_count,
                    COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float AS duration_sec,
                    COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
                    COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
@@ -472,14 +476,14 @@ async def aggregate_aggregations(
             tenant_id, cur_start, cur_end,
         ),
         pool.fetch(
-            """
+            f"""
             SELECT ut.id AS skill_id,
                    ut.task_name AS skill_name,
                    ut.category,
                    ut.related_platforms,
                    ut.task_description AS description,
                    COUNT(te.id)::bigint AS exec_count,
-                   COUNT(te.id) FILTER (WHERE te.execution_result = 'SUCCEED')::bigint AS success_count,
+                   COUNT(te.id) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success_count,
                    COUNT(te.id) FILTER (WHERE te.execution_result = 'FAILED')::bigint AS fail_count,
                    COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float AS duration_sec,
                    COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
@@ -520,10 +524,10 @@ async def aggregate_aggregations(
             tenant_id, cur_start, cur_end,
         ),
         pool.fetch(
-            """
+            f"""
             SELECT te.device_id,
                    COUNT(*)::bigint AS exec_count,
-                   COUNT(*) FILTER (WHERE te.execution_result = 'SUCCEED')::bigint AS success_count,
+                   COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success_count,
                    COUNT(*) FILTER (WHERE te.execution_result = 'FAILED')::bigint AS fail_count,
                    COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float AS duration_sec,
                    COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
@@ -605,6 +609,7 @@ async def aggregate_aggregations(
 
     account_totals = {
         "accounts": len([a for a in accounts if a["exec_count"] > 0]),
+        "success_count": sum(a["success_count"] for a in accounts),
         "reach": sum(a["reach"] for a in accounts),
         "dms": sum(a["dms"] for a in accounts),
         "comments": sum(a["comments"] for a in accounts),
@@ -620,7 +625,7 @@ async def aggregate_aggregations(
             "emoji": meta["emoji"],
             "color": meta["color"],
             "skills": [],
-            "totals": {"exec": 0, "success": 0, "comments": 0, "likes": 0, "saves": 0, "dms": 0, "reach": 0, "total_credits": 0},
+            "totals": {"exec": 0, "success_count": 0, "comments": 0, "likes": 0, "saves": 0, "dms": 0, "reach": 0, "total_credits": 0},
         }
 
     for r in skill_rows:
@@ -631,7 +636,7 @@ async def aggregate_aggregations(
             "description": r["description"] or "",
             "category": r["category"],
             "exec": int(r["exec_count"]),
-            "success": int(r["success_count"]),
+            "success_count": int(r["success_count"]),
             "fail": int(r["fail_count"]),
             "duration_sec": int(r["duration_sec"]),
             "comments": int(r["comments"]),
@@ -644,7 +649,7 @@ async def aggregate_aggregations(
         g = groups[group_key]
         g["skills"].append(skill_item)
         g["totals"]["exec"] += skill_item["exec"]
-        g["totals"]["success"] += skill_item["success"]
+        g["totals"]["success_count"] += skill_item["success_count"]
         g["totals"]["comments"] += skill_item["comments"]
         g["totals"]["likes"] += skill_item["likes"]
         g["totals"]["saves"] += skill_item["saves"]
@@ -724,12 +729,12 @@ async def aggregate_charts(
 ) -> dict[str, Any]:
     cur_start, cur_end, prev_start, prev_end, _, _, _ = _window or _resolve_window(range_param, start, end)
 
-    duration_sql = """
+    duration_sql = f"""
         SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float AS duration_sec
         FROM task_execution te
         JOIN users u ON u.id = te.user_id
         WHERE u.tenant_id = $1
-          AND te.execution_result = 'SUCCEED'
+          AND {_success_filter_sql('te')}
           AND COALESCE(te.finished_at, te.started_at) BETWEEN $2 AND $3
           AND NOT te.is_deleted AND NOT u.is_deleted
     """
@@ -799,11 +804,14 @@ async def aggregate_charts(
 
     prev_runtime_h = round(runtime_prev_sec / 3600, 1)
     prev_exec = int(prev_totals.get("executions", 0))
+    prev_success_exec = int(prev_totals.get("successes", 0))
 
     mini_stats = {
         "exec": str(total_exec),
         "exec_raw": total_exec,
         "exec_prev": prev_exec,
+        "success_count": success_exec,
+        "success_count_prev": prev_success_exec,
         "rate": f"{rate_pct}%",
         "runtime": f"{runtime_h}h",
         "runtime_raw": runtime_h,
@@ -1014,7 +1022,7 @@ async def stats_overview(pool: Pool, days: int, tenant_id: int) -> dict[str, Any
         f"""
         SELECT
             COUNT(*)::bigint AS total_executions,
-            COUNT(*) FILTER (WHERE te.execution_result = 'SUCCEED')::bigint AS success_count,
+            COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success_count,
             COUNT(*) FILTER (WHERE te.execution_result = 'FAILED')::bigint AS fail_count,
             COUNT(DISTINCT te.user_id)::bigint AS active_users,
             COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at)))/3600, 0)::float AS total_duration_hours
@@ -1052,7 +1060,7 @@ async def stats_overview(pool: Pool, days: int, tenant_id: int) -> dict[str, Any
 async def stats_trend(pool: Pool, days: int, tenant_id: int) -> dict[str, list[Any]]:
     if days == 1:
         rows = await pool.fetch(
-            """
+            f"""
             WITH hours AS (
                 SELECT generate_series(
                     DATE_TRUNC('day', NOW()),
@@ -1063,7 +1071,7 @@ async def stats_trend(pool: Pool, days: int, tenant_id: int) -> dict[str, list[A
             te_agg AS (
                 SELECT
                     DATE_TRUNC('hour', te.started_at) AS day_hour,
-                    COALESCE(SUM(CASE WHEN te.execution_result = 'SUCCEED' THEN 1 ELSE 0 END), 0)::bigint AS success,
+                    COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success,
                     COALESCE(SUM(CASE WHEN te.execution_result = 'FAILED' THEN 1 ELSE 0 END), 0)::bigint AS failed,
                     COUNT(*)::bigint AS total,
                     COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
@@ -1104,7 +1112,7 @@ async def stats_trend(pool: Pool, days: int, tenant_id: int) -> dict[str, list[A
         ]
     else:
         rows = await pool.fetch(
-            """
+            f"""
             WITH dates AS (
                 SELECT generate_series(
                     (NOW()::date - ($2::int - 1)),
@@ -1115,7 +1123,7 @@ async def stats_trend(pool: Pool, days: int, tenant_id: int) -> dict[str, list[A
             te_agg AS (
                 SELECT
                     DATE(te.started_at) AS day,
-                    COALESCE(SUM(CASE WHEN te.execution_result = 'SUCCEED' THEN 1 ELSE 0 END), 0)::bigint AS success,
+                    COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success,
                     COALESCE(SUM(CASE WHEN te.execution_result = 'FAILED' THEN 1 ELSE 0 END), 0)::bigint AS failed,
                     COUNT(*)::bigint AS total,
                     COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
@@ -1209,7 +1217,7 @@ async def stats_credits(pool: Pool, days: int, tenant_id: int) -> dict[str, list
 
 async def stats_tasks(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
     rows = await pool.fetch(
-        """
+        f"""
         SELECT
             ut.task_name,
             ut.category,
@@ -1222,7 +1230,7 @@ async def stats_tasks(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
             SELECT
                 te.task_id,
                 COUNT(*)::bigint AS total_executions,
-                COUNT(*) FILTER (WHERE te.execution_result = 'SUCCEED')::bigint AS success_count,
+                COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success_count,
                 COUNT(*) FILTER (WHERE te.execution_result = 'FAILED')::bigint AS fail_count
             FROM task_execution te
             JOIN users u ON u.id = te.user_id
@@ -1399,16 +1407,16 @@ async def get_transactions(pool: Pool, page: int, page_size: int, tenant_id: int
 
 async def get_skills(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
     rows = await pool.fetch(
-        """
+        f"""
         SELECT ut.id, ut.task_name AS skill_name, ut.task_description AS description,
                ut.related_platforms, ut.category,
                COALESCE(es.total, 0)::bigint AS total_executions,
-               COALESCE(es.success, 0)::bigint AS success_count
+               COALESCE(es.success_count, 0)::bigint AS success_count
         FROM user_task ut
         LEFT JOIN (
             SELECT te.task_id,
                    COUNT(*) AS total,
-                   COUNT(*) FILTER (WHERE te.execution_result = 'SUCCEED') AS success
+                   COUNT(*) FILTER (WHERE {_success_filter_sql('te')}) AS success_count
             FROM task_execution te
             JOIN users u ON u.id = te.user_id
             WHERE u.tenant_id = $1 AND NOT u.is_deleted
@@ -1425,15 +1433,17 @@ async def get_skills(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
 
 async def get_accounts(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
     rows = await pool.fetch(
-        """
+        f"""
         SELECT u.id, u.name AS username,
                COALESCE(es.exec_count, 0)::bigint AS exec_count,
+               COALESCE(es.success_count, 0)::bigint AS success_count,
                COALESCE(es.duration_hours, 0)::float AS duration_hours,
                COALESCE(cs.total_credits, 0)::float AS total_credits
         FROM users u
         LEFT JOIN (
             SELECT te.user_id,
                    COUNT(*)::bigint AS exec_count,
+                   COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success_count,
                    SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at)))/3600 AS duration_hours
             FROM task_execution te
             GROUP BY te.user_id

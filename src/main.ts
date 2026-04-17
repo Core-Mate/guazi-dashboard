@@ -59,7 +59,7 @@ function pickHoursValue(sources: Array<[string, any]>): number | null {
   return null
 }
 
-function pickHighlightExecValue(highlights: any): number | null {
+function pickHighlightMetricValue(highlights: any, keys: string[], fieldName: string = 'value'): number | null {
   var cards = Array.isArray(highlights)
     ? highlights
     : (highlights && Array.isArray(highlights.cards) ? highlights.cards : [])
@@ -68,8 +68,8 @@ function pickHighlightExecValue(highlights: any): number | null {
     var key = String(card && card.key != null ? card.key : '')
       .toLowerCase()
       .replace(/[^a-z0-9]/g, '')
-    if (key === 'complete' || key === 'success' || key === 'successcount') {
-      return parseMetricValue(card && card.value)
+    if (keys.indexOf(key) >= 0) {
+      return parseMetricValue(card && card[fieldName])
     }
   }
   return null
@@ -77,20 +77,19 @@ function pickHighlightExecValue(highlights: any): number | null {
 
 function applyMiniStats(mini: any, range?: string, highlights?: any) {
   if (!mini) return
-  var exec = mini.exec ?? mini.executions ?? mini.total_executions ?? 0
-  var execHighlightValue = pickHighlightExecValue(highlights)
+  var successCur = pickMetricValue([
+    ['successCount', mini.successCount],
+    ['success_count', mini.success_count],
+  ])
+  if (successCur == null) successCur = pickHighlightMetricValue(highlights, ['successcount'], 'value')
+  var successPrev = pickMetricValue([
+    ['successCountPrev', mini.successCountPrev],
+    ['success_count_prev', mini.success_count_prev],
+  ])
+  if (successPrev == null) successPrev = pickHighlightMetricValue(highlights, ['successcount'], 'prev')
   var runtimeRaw = mini.runtime ?? mini.total_duration ?? mini.total_duration_hours ?? '0h'
   var runtime = typeof runtimeRaw === 'number' ? Math.round(runtimeRaw) + 'h' : String(runtimeRaw)
   var cost = mini.cost ?? mini.credits ?? mini.total_credits ?? 0
-  var execCur = pickMetricValue([
-    ['exec_raw', mini.exec_raw],
-    ['exec', mini.exec],
-    ['executions', mini.executions],
-    ['total_executions', mini.total_executions],
-  ])
-  var execPrev = pickMetricValue([
-    ['exec_prev', mini.exec_prev],
-  ])
   var runtimeCurHours = pickHoursValue([
     ['runtime_raw', mini.runtime_raw],
     ['total_duration_hours', mini.total_duration_hours],
@@ -112,14 +111,14 @@ function applyMiniStats(mini: any, range?: string, highlights?: any) {
     ['cost_prev', mini.cost_prev],
   ])
   // sidebar mini stats
-  setText('miniExec', String(execHighlightValue != null ? execHighlightValue : exec))
+  setText('miniExec', String(successCur ?? 0))
   setText('miniRuntime', runtime)
   setText('miniCost', String(cost))
   // dashTab-ops stats card
-  setText('statExec', String(exec))
+  setText('statExec', String(successCur ?? 0))
   setText('statRuntime', runtime)
   setText('statCost', String(cost))
-  renderStatChange('statExecChange', execCur ?? 0, execPrev, range)
+  renderStatChange('statExecChange', successCur ?? 0, successPrev, range)
   renderStatChange('statRuntimeChange', runtimeCurHours ?? 0, runtimePrevHours, range)
   renderStatChange('statCostChange', costCur ?? 0, costPrev, range)
 }

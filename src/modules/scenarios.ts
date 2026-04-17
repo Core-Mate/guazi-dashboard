@@ -86,6 +86,14 @@ function getScenarioGroupKey(group: any) {
   return String(group && (group.category_group ?? group.group ?? group.key ?? group.id ?? group.name) || '').toLowerCase()
 }
 
+function getScenarioGroupSuccessCount(group: any) {
+  return num(group && (
+    group.successCount ??
+    group.success_count ??
+    (group.totals && (group.totals.successCount ?? group.totals.success_count))
+  ))
+}
+
 function renderScenarioHeader(label: string, key?: string) {
   if (!key) return '<th>' + label + '</th>'
   var cls = sortState.col === key ? (sortState.dir === 'asc' ? 'th-sort-asc' : 'th-sort-desc') : ''
@@ -148,13 +156,13 @@ export function renderScenarioCards() {
       rows = rows.filter(function(r) { return r.skill.toLowerCase().indexOf(q) !== -1 || r.skillName.toLowerCase().indexOf(q) !== -1 || (r.description || '').toLowerCase().indexOf(q) !== -1; });
     }
     rows = sortScenarioRows(rows);
-    var totalSuccess = rows.reduce((a,r) => a + r.success, 0);
+    var totalSuccess = getScenarioGroupSuccessCount(g);
 
     var extraCols = g.extraCols || [];
-    var slimCols = ['单次任务', '完成数', '算力豆', '时长 (h:m)'].concat(extraCols);
+    var slimCols = ['单次任务', '完成', '算力豆', '时长 (h:m)'].concat(extraCols);
     var headHtml = slimCols.map((c, i) => {
       if (i === 0) return renderScenarioHeader('单次任务', 'name');
-      if (i === 1) return renderScenarioHeader('完成数', 'success');
+      if (i === 1) return renderScenarioHeader('完成', 'success');
       if (i === 2) return renderScenarioHeader('算力豆', 'credits');
       if (i === 3) return renderScenarioHeader('时长 (h:m)', 'duration');
       return renderScenarioHeader(c, scenarioInteractionSortKeys[i - 4]);
@@ -177,7 +185,7 @@ export function renderScenarioCards() {
         <div style="display:flex;align-items:center;gap:12px;">
           <div class="scenario-card-metrics">
             <span>技能数: <strong>${rows.length}</strong></span>
-            <span>成功: <strong>${totalSuccess}</strong></span>
+            <span>完成: <strong>${totalSuccess}</strong></span>
             <span>算力豆: <strong>${rows.reduce((a,r) => a + getScenarioCredits(r), 0)}</strong></span>
           </div>
           <span class="scenario-chevron open" id="chev-${g.id}">▾</span>
@@ -219,12 +227,12 @@ export function renderScenarioCardsFull(containerId?: string, idPrefix?: string)
     }
     rows = sortScenarioRows(rows);
     if (!rows.length) return '';
-    var totalSuccess = rows.reduce(function(a,r){ return a+r.success; }, 0);
-    var commonCols = ['单次任务', '完成数', '算力豆', '时长 (h:m)'];
+    var totalSuccess = getScenarioGroupSuccessCount(g);
+    var commonCols = ['单次任务', '完成', '算力豆', '时长 (h:m)'];
     var allCols = commonCols.concat(g.extraCols || []);
     var headHtml = allCols.map(function(c, i){
       if (i === 0) return renderScenarioHeader('单次任务', 'name')
-      if (i === 1) return renderScenarioHeader('完成数', 'success')
+      if (i === 1) return renderScenarioHeader('完成', 'success')
       if (i === 2) return renderScenarioHeader('算力豆', 'credits')
       if (i === 3) return renderScenarioHeader('时长 (h:m)', 'duration')
       return renderScenarioHeader(c, scenarioInteractionSortKeys[i - 4])
@@ -243,7 +251,7 @@ export function renderScenarioCardsFull(containerId?: string, idPrefix?: string)
       '<div class="scenario-card-header" onclick="toggleScenarioFull(\''+togglePrefix+g.id+'\')">' +
         '<div class="scenario-card-title"><span class="scenario-icon">'+g.icon+'</span>'+g.name+'</div>' +
         '<div style="display:flex;align-items:center;gap:12px;">' +
-          '<div class="scenario-card-metrics"><span>技能数: <strong>'+rows.length+'</strong></span><span>成功: <strong>'+totalSuccess+'</strong></span><span>算力豆: <strong>'+rows.reduce((a,r) => a + getScenarioCredits(r), 0)+'</strong></span></div>' +
+          '<div class="scenario-card-metrics"><span>技能数: <strong>'+rows.length+'</strong></span><span>完成: <strong>'+totalSuccess+'</strong></span><span>算力豆: <strong>'+rows.reduce((a,r) => a + getScenarioCredits(r), 0)+'</strong></span></div>' +
           '<span class="scenario-chevron open" id="'+chevPrefix+'-'+g.id+'">&#9662;</span>' +
         '</div>' +
       '</div>' +
@@ -313,7 +321,7 @@ export function flipScenario(id, btn) {
 }
 
 export function exportScenarioCSV() {
-  var headers = ['单次任务', '指令名称', '完成数', '算力豆', '时长 (h:m)', '评论', '点赞', '收藏', '私信', '触达量'];
+  var headers = ['单次任务', '指令名称', '完成', '算力豆', '时长 (h:m)', '评论', '点赞', '收藏', '私信', '触达量'];
   var rows = [];
   scenarioGroups.forEach(function(g) {
     var data = skillData[g.id];
@@ -322,7 +330,7 @@ export function exportScenarioCSV() {
       rows.push([r.skill, r.skillName, r.success, getScenarioCredits(r), r.avgDur || '—', r.comments || 0, r.likes || 0, getScenarioFavorites(r), r.dms || 0, r.uniqueReach || 0]);
     });
   });
-  downloadCSV('任务产出_' + new Date().toISOString().slice(0,10) + '.csv', headers, rows);
+  downloadCSV('任务完成_' + new Date().toISOString().slice(0,10) + '.csv', headers, rows);
 }
 
 if (typeof window !== 'undefined') {
@@ -380,7 +388,7 @@ function getGroupItems(group: any) {
 
 function mapSkillItems(items: any[], meta: any) {
   return items.map(function(item, index) {
-    var success = num(item.success ?? item.success_count ?? item.completed ?? item.exec_count)
+    var success = num(item.success_count ?? item.success ?? item.completed)
     var credits = num(item.total_credits ?? item.totalCredits ?? item.token_avg ?? 0)
     var tokenAvg = num(item.tokenAvg ?? item.token_avg ?? item.avg_cost ?? item.credits_avg)
     var totalCredits = num(item.totalCredits ?? item.total_credits ?? item.token_total ?? credits ?? tokenAvg * success)
@@ -465,6 +473,7 @@ export function renderSkillGroupsFromAggs(groups: any[]) {
       color: group.color || '#6366f1',
       extraCols: meta.extraCols,
       extraFn: meta.extraFn,
+      successCount: getScenarioGroupSuccessCount(group),
     })
     enabledScenarios.push(meta.id)
     skillData[meta.id] = mapSkillItems(items, meta)

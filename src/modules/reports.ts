@@ -1,4 +1,3 @@
-import { computeChange } from '../data/highlights'
 import { Chart } from 'chart.js'
 import { fetchDashboardData } from './api-integration'
 import { formatCompareText } from './utils'
@@ -250,15 +249,6 @@ async function buildReportHTML(dim) {
     return String(text || '').replace(/\s+/g, ' ').trim();
   }
 
-  function derivePrevFromChange(curValue, changeValue) {
-    var cur = asNumber(curValue);
-    var pct = asNumber(changeValue);
-    if (cur == null || pct == null) return null;
-    var factor = 1 + pct / 100;
-    if (!isFinite(factor) || factor === 0) return null;
-    return cur / factor;
-  }
-
   function achievementCompareMeta(item) {
     var hasRawCompare = !!(item && item.current !== undefined && item.prev !== undefined);
     if (hasRawCompare) {
@@ -274,25 +264,6 @@ async function buildReportHTML(dim) {
 
     var current = asNumber(item && item.value);
     var prev = asNumber(item && item.prev);
-    if (current == null) {
-      var delta = asNumber(item && item.delta_text);
-      var pct = asNumber(item && item.change_pct);
-      if (delta != null && pct != null) {
-        if (pct === 0) {
-          current = delta;
-          prev = 0;
-        } else {
-          var derivedPrev = delta / (pct / 100);
-          if (isFinite(derivedPrev)) {
-            prev = derivedPrev;
-            current = derivedPrev + delta;
-          }
-        }
-      } else if (delta != null) {
-        current = delta;
-        prev = 0;
-      }
-    }
     if (current == null || prev == null) {
       return {
         cls: item && item.change_cls ? item.change_cls : 'flat',
@@ -331,25 +302,8 @@ async function buildReportHTML(dim) {
     return null;
   }
 
-  function getCardChange(card) {
-    if (!card) return null;
-    if (typeof card.change_pct === 'number' && !isNaN(card.change_pct)) return card.change_pct;
-    var value = asNumber(card.value);
-    var prev = asNumber(card.prev);
-    if (value != null && prev != null && prev !== 0) return computeChange(value, prev).pct;
-    return null;
-  }
-
-  function renderTrendMeta(curValue, prevValue, fallbackChangePct?) {
-    var compare;
-    if (prevValue == null && fallbackChangePct != null) {
-      prevValue = derivePrevFromChange(curValue, fallbackChangePct);
-    }
-    if (prevValue != null || fallbackChangePct != null) {
-      compare = formatCompareText(curValue ?? 0, prevValue ?? 0, compareLabel);
-    } else {
-      compare = formatCompareText(curValue ?? 0, null, compareLabel);
-    }
+  function renderTrendMeta(curValue, prevValue) {
+    var compare = formatCompareText(curValue ?? 0, prevValue, compareLabel);
     if (compare.cls === 'up') return { arrow: '↗', color: '#16a34a', text: compare.text };
     if (compare.cls === 'down') return { arrow: '↘', color: '#dc2626', text: compare.text };
     return {
@@ -359,8 +313,8 @@ async function buildReportHTML(dim) {
     };
   }
 
-  function renderTrendText(card, fallbackChangePct?) {
-    var meta = renderTrendMeta(asNumber(card && card.value), asNumber(card && card.prev), fallbackChangePct);
+  function renderTrendText(card) {
+    var meta = renderTrendMeta(asNumber(card && card.value), asNumber(card && card.prev));
     return '<div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:' + meta.color + ';"><span>' + meta.arrow + '</span><span>' + esc(meta.text) + '</span></div>';
   }
 
@@ -503,7 +457,7 @@ async function buildReportHTML(dim) {
         '<span style="font-size:13px;font-weight:600;color:#475569;">' + esc(label) + '</span>' +
       '</div>' +
       '<div style="font-size:34px;line-height:1.05;font-weight:800;color:#0f172a;letter-spacing:-0.02em;">' + esc(value) + '</div>' +
-      '<div>' + renderTrendText(card, getCardChange(card)) + '</div>' +
+      '<div>' + renderTrendText(card) + '</div>' +
       '<div style="margin-top:auto;">' + miniSparklineHTML(seriesValues, accent) + '</div>' +
     '</div>';
   }
@@ -572,17 +526,18 @@ async function buildReportHTML(dim) {
   var miniStats = snap && snap.charts && snap.charts.mini_stats ? snap.charts.mini_stats : {};
   var accountTotals = snap && ((snap as any).account_totals || (snap.aggs && snap.aggs.account_totals)) ? ((snap as any).account_totals || snap.aggs.account_totals) : {};
 
-  var execCard = findCard(highlightCards, ['exec', 'execution', 'executions', 'total_executions', 'task', 'tasks', '任务', 'success'], false);
+  var execCard = findByKey(highlightCards, 'successCount') || findCard(highlightCards, ['successcount'], false);
   var runtimeCard = findCard(highlightCards, ['runtime', 'duration', 'hours', '时长'], false);
   var costCard = findCard(highlightCards, ['credit', 'credits', 'cost', 'token', '豆'], false);
   var reachCard = findCard(highlightCards, ['reach', 'impression', 'impressions', '触达'], false);
-  var trendCard = findCard(highlightCards, ['exec', 'execution', 'executions', 'task', 'tasks', 'success'], true);
+  var trendCard = findByKey(highlightCards, 'successCount');
+  if (!trendCard || !cardHasSeries(trendCard)) trendCard = findCard(highlightCards, ['successcount'], true);
   if (!trendCard) trendCard = findCard(highlightCards, ['reach', 'impression', '触达'], true);
   if (!trendCard) trendCard = findCard(highlightCards, [], true);
 
-  var execValue = miniStats && (miniStats.exec ?? miniStats.executions ?? miniStats.total_executions);
+  var execValue = miniStats && (miniStats.successCount ?? miniStats.success_count);
   if (execValue == null) execValue = execCard && execCard.value;
-  if (execValue == null) execValue = accountTotals && (accountTotals.success_count ?? accountTotals.exec ?? accountTotals.total_executions);
+  if (execValue == null) execValue = accountTotals && (accountTotals.successCount ?? accountTotals.success_count);
 
   var runtimeValue = miniStats && (miniStats.runtime ?? miniStats.total_duration ?? miniStats.total_duration_hours);
   if (runtimeValue == null) runtimeValue = runtimeCard && runtimeCard.value;
@@ -592,26 +547,19 @@ async function buildReportHTML(dim) {
   if (costValue == null) costValue = costCard && costCard.value;
   if (costValue == null) costValue = accountTotals && (accountTotals.token_used ?? accountTotals.credits);
 
-  var reachValue = reachCard && reachCard.value;
-  if (reachValue == null) reachValue = accountTotals && accountTotals.reach;
-
-  var execChange = getCardChange(execCard);
-  if (execChange == null && fallbackTrendData && fallbackTrendData.execChange != null) execChange = asNumber(fallbackTrendData.execChange);
-  var runtimeChange = getCardChange(runtimeCard);
-  var costChange = getCardChange(costCard);
-  if (costChange == null && fallbackTrendData && fallbackTrendData.costWow != null) costChange = asNumber(fallbackTrendData.costWow);
-  var reachChange = getCardChange(reachCard);
-  if (reachChange == null && fallbackTrendData && fallbackTrendData.reachChange != null) reachChange = asNumber(fallbackTrendData.reachChange);
-  var execPrev = execCard ? asNumber(execCard.prev) : derivePrevFromChange(execValue, execChange);
-  var runtimePrev = runtimeCard ? asNumber(runtimeCard.prev) : derivePrevFromChange(runtimeValue, runtimeChange);
-  var costPrev = costCard ? asNumber(costCard.prev) : derivePrevFromChange(costValue, costChange);
+  var execPrev = miniStats && (miniStats.successCountPrev ?? miniStats.success_count_prev);
+  if (execPrev == null) execPrev = execCard ? asNumber(execCard.prev) : null;
+  var runtimePrev = miniStats && (miniStats.runtimePrev ?? miniStats.runtime_prev);
+  if (runtimePrev == null) runtimePrev = runtimeCard ? asNumber(runtimeCard.prev) : null;
+  var costPrev = miniStats && (miniStats.costPrev ?? miniStats.cost_prev);
+  if (costPrev == null) costPrev = costCard ? asNumber(costCard.prev) : null;
 
   var trendLabels = trendCard && trendCard.series && safeArray(trendCard.series.labels).length
     ? safeArray(trendCard.series.labels)
     : safeArray(fallbackTrendData.labels);
   var trendValues = trendCard && trendCard.series && safeArray(trendCard.series.values).length
     ? safeArray(trendCard.series.values)
-    : safeArray(fallbackTrendData.success || fallbackTrendData.exec || fallbackTrendData.data);
+    : safeArray(fallbackTrendData.success);
   if (!safeArray(trendValues).length && reachCard && reachCard.series && safeArray(reachCard.series.values).length) {
     trendLabels = safeArray(reachCard.series.labels);
     trendValues = safeArray(reachCard.series.values);
@@ -656,11 +604,7 @@ async function buildReportHTML(dim) {
     achievementHTML = '<div class="achievement-tag achieve-gold"><div class="achieve-row1"><span class="achieve-emoji">✨</span><span class="achieve-headline">暂无亮点数据</span></div></div>';
   }
 
-  var trendCaption = renderTrendMeta(
-    asNumber(trendCard && trendCard.value),
-    asNumber(trendCard && trendCard.prev),
-    getCardChange(trendCard) != null ? getCardChange(trendCard) : execChange
-  ).text;
+  var trendCaption = renderTrendMeta(asNumber(trendCard && trendCard.value), asNumber(trendCard && trendCard.prev)).text;
 
   // 5 核心互动指标（顺序与调色板和效果总览里的 highlightGrid 对齐）
   var keyMetricDefs = [
@@ -678,7 +622,7 @@ async function buildReportHTML(dim) {
   }).join('');
 
   var opsRowHTML = opsSummaryRowHTML([
-    { label: '完成任务数',    value: formatInteger(execValue),    current: execValue,    prev: execPrev },
+    { label: '完成',          value: formatInteger(execValue),    current: execValue,    prev: execPrev },
     { label: '累计运行时长',  value: formatRuntime(runtimeValue), current: runtimeValue, prev: runtimePrev },
     { label: '消耗算力豆',    value: formatInteger(costValue),    current: costValue,    prev: costPrev },
   ]);
@@ -724,7 +668,7 @@ async function buildReportHTML(dim) {
           '<div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:20px;padding:24px;box-shadow:0 12px 28px rgba(15,23,42,0.05);">' +
             '<div style="display:grid;grid-template-columns:1.5fr 1fr 1fr;gap:24px;align-items:stretch;">' +
               '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:20px;display:flex;flex-direction:column;gap:14px;min-height:320px;">' +
-                '<div style="font-size:15px;font-weight:700;color:#0f172a;">完成任务量趋势</div>' +
+                '<div style="font-size:15px;font-weight:700;color:#0f172a;">完成趋势</div>' +
                 '<div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;padding:10px;flex:1;display:flex;align-items:center;justify-content:center;">' +
                   (safeArray(trendValues).length ? lineChartHTML(trendLabels, trendValues) : placeholderHTML('暂无数据')) +
                 '</div>' +

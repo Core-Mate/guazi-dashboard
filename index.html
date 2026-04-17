@@ -69,7 +69,7 @@
     <div id="highlightDetail"></div>
 
     <div class="stat-mini-row" id="execStatMini">
-      <span>执行 <strong id="miniExec">0</strong> 次</span>
+      <span>完成 <strong id="miniExec">0</strong> 次</span>
       <span class="stat-mini-sep">·</span>
       <span>时长 <strong id="miniRuntime">0h</strong></span>
       <span class="stat-mini-sep">·</span>
@@ -131,7 +131,7 @@
   <div class="tab-content" id="dashTab-ops">
     <div class="stat-grid" style="grid-template-columns: repeat(2, 1fr);">
       <div class="stat-card">
-        <div class="stat-header"><span class="stat-title">完成任务</span><svg class="stat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>
+        <div class="stat-header"><span class="stat-title">完成</span><svg class="stat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>
         <div class="stat-value" id="statExec">42</div>
         <div class="stat-change up" id="statExecChange"></div>
       </div>
@@ -147,10 +147,10 @@
     </div>
 
     <div class="card">
-      <div class="card-header"><div><div class="card-title">完成任务趋势</div><div class="card-desc" id="opsTrendDesc">多维度数据对比</div></div><div style="display:flex;gap:6px;"><button class="btn-export-sm" onclick="exportTrendCSV()" title="导出CSV">导出 CSV</button><button class="btn-export-sm" onclick="exportTrendPNG()" title="导出图片">导出 PNG</button></div></div>
+      <div class="card-header"><div><div class="card-title">完成趋势</div><div class="card-desc" id="opsTrendDesc">多维度数据对比</div></div><div style="display:flex;gap:6px;"><button class="btn-export-sm" onclick="exportTrendCSV()" title="导出CSV">导出 CSV</button><button class="btn-export-sm" onclick="exportTrendPNG()" title="导出图片">导出 PNG</button></div></div>
       <div class="card-body">
         <div class="chart-toggles" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
-          <label class="chart-toggle active" data-key="tasks"><span class="toggle-dot" style="background:#2563eb"></span> 完成任务 (次)</label>
+          <label class="chart-toggle active" data-key="tasks"><span class="toggle-dot" style="background:#2563eb"></span> 完成 (次)</label>
           <label class="chart-toggle" data-key="runtime"><span class="toggle-dot" style="background:#0891b2"></span> 运行任务时长 (小时)</label>
           <label class="chart-toggle" data-key="comments"><span class="toggle-dot" style="background:#16a34a"></span> 评论 (条)</label>
           <label class="chart-toggle" data-key="likes"><span class="toggle-dot" style="background:#f59e0b"></span> 点赞 (次)</label>
@@ -178,7 +178,7 @@
     <!-- 任务维度 -->
     <div id="opsView-scenarios">
       <div class="card">
-        <div class="card-header"><div><div class="card-title">任务产出</div><div class="card-desc">各任务触达效果</div></div><div><input class="filter-select" id="scenarioSearch" placeholder="搜索任务..." oninput="searchScenario(this.value)" style="width:180px;"><button class="btn-export-sm" onclick="exportScenarioCSV()" title="导出CSV">导出 CSV</button></div></div>
+        <div class="card-header"><div><div class="card-title">任务完成</div><div class="card-desc">各任务触达效果</div></div><div><input class="filter-select" id="scenarioSearch" placeholder="搜索任务..." oninput="searchScenario(this.value)" style="width:180px;"><button class="btn-export-sm" onclick="exportScenarioCSV()" title="导出CSV">导出 CSV</button></div></div>
         <div class="card-body" style="padding-top:12px;">
           <div id="scenarioCardsFull"></div>
         </div>

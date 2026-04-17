@@ -5,6 +5,7 @@ import { smoothToggleCollapse } from './utils'
 
 var accountSortState: { col: string; dir: 'asc' | 'desc' } = { col: '', dir: 'asc' }
 var accountSearchQuery = '';
+var accountSummarySuccessCount = 0;
 
 function normalizeAccountSortKey(col: string) {
   if (col === 'saves') return 'favorites'
@@ -100,7 +101,7 @@ export function exportAccountCSV() {
   var rows = accountList.map(function(acc) {
     return [acc.name, acc.successCount, acc.tokenUsed, acc.successDuration, acc.comments, acc.likes, getAccountFavorites(acc), acc.dms, getAccountUniqueReach(acc)];
   });
-  downloadCSV('账号明细_' + new Date().toISOString().slice(0,10) + '.csv', ['账号', '完成数', '算力豆', '时长 (h:m)', '评论', '点赞', '收藏', '私信', '触达量'], rows);
+  downloadCSV('账号明细_' + new Date().toISOString().slice(0,10) + '.csv', ['账号', '完成', '算力豆', '时长 (h:m)', '评论', '点赞', '收藏', '私信', '触达量'], rows);
 }
 
 export function renderAccountAcquireGroup() {
@@ -114,7 +115,6 @@ export function renderAccountAcquireGroup() {
   }
   filtered = sortAccounts(filtered);
   var totalAccounts = filtered.length;
-  var totalSuccess = filtered.reduce(function(a, x) { return a + (x.successCount || 0); }, 0);
   var totalCredits = filtered.reduce(function(a, x) { return a + (x.tokenUsed || 0); }, 0);
   var tableRows = filtered.length ? filtered.map(function(acc) {
     function displayVal(v) { return v > 0 ? v.toLocaleString() : '<span class="text-na">暂无</span>'; }
@@ -137,7 +137,7 @@ export function renderAccountAcquireGroup() {
         '<div style="display:flex;align-items:center;gap:12px;">' +
           '<div class="scenario-card-metrics">' +
             '<span>账号: <strong>' + totalAccounts + '</strong></span>' +
-            '<span>完成: <strong>' + totalSuccess.toLocaleString() + '</strong></span>' +
+            '<span>完成: <strong>' + accountSummarySuccessCount.toLocaleString() + '</strong></span>' +
             '<span>算力豆: <strong>' + totalCredits.toLocaleString() + '</strong></span>' +
           '</div>' +
           '<span class="scenario-chevron open" id="chevAccountAcquire">&#9662;</span>' +
@@ -148,7 +148,7 @@ export function renderAccountAcquireGroup() {
           '<table>' +
             '<thead><tr>' +
               renderAccountHeader('账号', 'name') +
-              renderAccountHeader('完成数', 'success') +
+              renderAccountHeader('完成', 'success') +
               renderAccountHeader('算力豆', 'credits') +
               renderAccountHeader('时长 (h:m)', 'duration') +
               renderAccountHeader('评论', 'comments') +
@@ -188,7 +188,7 @@ export function renderAccountsFromAggs(accounts: any[], totals: any) {
       name: account.name || account.username || account.label || ('账号 ' + (index + 1)),
       deviceId: account.deviceId || account.device_id || account.device_label || '',
       tokenUsed: toNumber(account.tokenUsed ?? account.token_used ?? account.total_credits ?? account.cost),
-      successCount: toNumber(account.successCount ?? account.success_count ?? account.exec_count ?? account.executions),
+      successCount: toNumber(account.successCount ?? account.success_count),
       durationSec: durationSec,
       successDuration: successDuration,
       comments: toNumber(account.comments ?? account.comment_count),
@@ -200,18 +200,8 @@ export function renderAccountsFromAggs(accounts: any[], totals: any) {
       reach: uniqueReach,
     })
   })
+  accountSummarySuccessCount = toNumber(totals && (totals.successCount ?? totals.success_count))
   renderAccountAcquireGroup()
-
-  if (!totals) return
-  var header = document.querySelector('#accountScenarioGroup .scenario-card-metrics')
-  if (header) {
-    var sumSuccess = accountList.reduce(function(a, x) { return a + (x.successCount || 0); }, 0)
-    var sumCredits = accountList.reduce(function(a, x) { return a + (x.tokenUsed || 0); }, 0)
-    header.innerHTML =
-      '<span>账号: <strong>' + toNumber(totals.accounts || accountList.length) + '</strong></span>' +
-      '<span>完成: <strong>' + toNumber(totals.success || totals.success_count || sumSuccess).toLocaleString() + '</strong></span>' +
-      '<span>算力豆: <strong>' + toNumber(totals.credits || totals.total_credits || sumCredits).toLocaleString() + '</strong></span>'
-  }
 }
 
 (window as any).toggleAccountAcquire = function() {

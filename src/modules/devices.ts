@@ -78,7 +78,7 @@ export function searchDevice(query) {
 }
 
 export function exportDeviceCSV() {
-  var headers = ['设备', '操作人', '算力豆', '完成数', '时长', '评论', '点赞', '收藏', '私信', '触达量'];
+  var headers = ['设备', '操作人', '算力豆', '完成', '时长', '评论', '点赞', '收藏', '私信', '触达量'];
   var rows = deviceList.map(function(dev) {
     var m = deviceMetrics[dev.id];
     if (!m) return null;
@@ -162,7 +162,7 @@ export function renderDevicesFromAggs(devices: any[], heat: any[]) {
     })
     deviceMetrics[id] = {
       tokenUsage: toNumber(device.tokenUsage ?? device.token_usage ?? device.total_credits ?? device.cost),
-      successCount: toNumber(device.successCount ?? device.success_count ?? device.exec_count),
+      successCount: toNumber(device.successCount ?? device.success_count),
       successDuration: device.successDuration || device.success_duration || device.duration || '0h',
       comments: toNumber(device.comments),
       likes: toNumber(device.likes),

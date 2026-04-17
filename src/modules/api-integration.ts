@@ -27,6 +27,22 @@ export interface HighlightCard {
   sparkline?: number[];
 }
 
+interface DashboardMiniStats {
+  exec: number | string;
+  exec_raw?: number;
+  exec_prev?: number;
+  success_count?: number;
+  success_count_prev?: number;
+  runtime: number | string;
+  runtime_raw?: number;
+  runtime_prev?: number;
+  runtime_sec?: number;
+  runtime_prev_sec?: number;
+  cost: number | string;
+  cost_raw?: number;
+  cost_prev?: number;
+}
+
 export interface DashboardSnapshot {
   highlights: { range: string; compare_label: string; cards: HighlightCard[] };
   achievements: { range: string; compare_label: string; achievements: any[] };
@@ -42,7 +58,7 @@ export interface DashboardSnapshot {
   charts: {
     platform_breakdown: any[];
     interaction_breakdown: any[];
-    mini_stats: any;
+    mini_stats: DashboardMiniStats;
     roi: any;
   };
   ops_trend?: {
@@ -99,7 +115,7 @@ export const EMPTY_SNAPSHOT: DashboardSnapshot = {
   },
   aggs: {
     accounts: [],
-    account_totals: {},
+    account_totals: { success_count: 0 },
     skill_groups: [],
     devices: [],
     device_heat: [],
@@ -109,7 +125,7 @@ export const EMPTY_SNAPSHOT: DashboardSnapshot = {
   charts: {
     platform_breakdown: [],
     interaction_breakdown: [],
-    mini_stats: { exec: 0, runtime: '', cost: 0 },
+    mini_stats: { exec: 0, success_count: 0, success_count_prev: 0, runtime: '', cost: 0 },
     roi: { value: 0, cost: 0, roi: 0, saved: 0, saved_pct: 0, breakdown: [] },
   },
   ops_trend: {
@@ -527,7 +543,7 @@ export async function tryLiveAccounts() {
       name: a.username || '未知',
       deviceId: '',
       tokenUsed: Math.round(a.total_credits || 0),
-      successCount: a.success_count ?? a.exec_count,
+      successCount: a.success_count ?? 0,
       successDuration: typeof a.duration === 'number' ? fmtHM(a.duration) : (a.duration || '0:00'),
       comments: 0,
       likes: 0,

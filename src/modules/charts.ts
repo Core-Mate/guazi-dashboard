@@ -114,7 +114,7 @@ function getTrendSeries(source, key, fallback = []) {
 }
 
 function getTaskSeries(source, fallback = []) {
-  return getTrendSeries(source, 'success', getTrendSeries(source, 'total', fallback));
+  return getTrendSeries(source, 'success', fallback);
 }
 
 function getOpsChartData(range, opsData?): any {
@@ -142,8 +142,8 @@ function getOpsChartData(range, opsData?): any {
     : (emptySource.labels || []);
   return Object.assign({}, emptySource, {
     labels: labels,
-    data: getTaskSeries(liveSource, emptySource.data || emptySource.success || []),
-    success: getTaskSeries(liveSource, emptySource.success || emptySource.data || []),
+    data: getTaskSeries(liveSource, emptySource.success || []),
+    success: getTaskSeries(liveSource, emptySource.success || []),
     failed: getTrendSeries(liveSource, 'failed', emptySource.failed || []),
     total: getTrendSeries(liveSource, 'total', emptySource.total || emptySource.data || []),
     comments: getTrendSeries(liveSource, 'comments', emptySource.comments || []),
@@ -158,7 +158,7 @@ function getOpsChartData(range, opsData?): any {
 
 var keyToSeries: Record<string, any> = {
   tasks: {
-    label: '完成任务',
+    label: '完成',
     color: '#2563eb',
     fill: 'rgba(37,99,235,0.08)',
     unit: '次',
@@ -867,7 +867,7 @@ export function exportTrendCSV() {
   var key = currentRange || '7d';
   var d = getOpsChartData(key, lastOpsData);
   if (!d) return;
-  var headers = ['日期', '完成任务', '运行时长(h)', '评论量', '点赞量', '收藏量', '私信量', '触达量', '算力豆量'];
+  var headers = ['日期', '完成', '运行时长(h)', '评论量', '点赞量', '收藏量', '私信量', '触达量', '算力豆量'];
   var rows = d.labels.map(function(label, i) {
     return [
       label,
@@ -881,7 +881,7 @@ export function exportTrendCSV() {
       d.credits ? d.credits[i] || 0 : 0,
     ];
   });
-  downloadCSV('完成任务趋势_' + new Date().toISOString().slice(0,10) + '.csv', headers, rows);
+  downloadCSV('完成趋势_' + new Date().toISOString().slice(0,10) + '.csv', headers, rows);
 }
 
 export function exportTrendPNG() {
@@ -889,7 +889,7 @@ export function exportTrendPNG() {
   var url = costChart.toBase64Image('image/png', 1);
   var a = document.createElement('a');
   a.href = url;
-  a.download = '完成任务趋势_' + new Date().toISOString().slice(0,10) + '.png';
+  a.download = '完成趋势_' + new Date().toISOString().slice(0,10) + '.png';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

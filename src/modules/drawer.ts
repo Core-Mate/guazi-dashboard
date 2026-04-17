@@ -19,7 +19,7 @@ export function openDrawer(i) {
     return;
   }
   var platforms = String(task.related_platforms || '').trim() || '未提供'
-  var summary = '总执行 ' + Number(task.total_executions || 0) + ' 次，成功 ' + Number(task.success_count || 0) + ' 次，失败 ' + Number(task.fail_count || 0) + ' 次'
+  var summary = '总执行 ' + Number(task.total_executions || 0) + ' 次，完成 ' + Number(task.success_count || 0) + ' 次，失败 ' + Number(task.fail_count || 0) + ' 次'
   document.getElementById('drawerTitle').textContent = task.task_name || '未命名任务';
   document.getElementById('drawerSub').textContent = task.category || '任务聚合';
   document.getElementById('drawerKV').innerHTML =

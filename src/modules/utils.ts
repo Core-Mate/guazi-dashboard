@@ -69,7 +69,7 @@ export function renderTaskTable() {
       var successCount = Number(task.success_count || 0)
       var totalExecutions = Number(task.total_executions || 0)
       var failCount = Number(task.fail_count || 0)
-      var statusText = '成功 ' + successCount + ' / 总计 ' + totalExecutions + (failCount > 0 ? ' · 失败 ' + failCount : '')
+      var statusText = '完成 ' + successCount + ' / 总计 ' + totalExecutions + (failCount > 0 ? ' · 失败 ' + failCount : '')
       return '<tr onclick="openDrawer(' + i + ')">' +
         '<td class="td-bold">' + escapeHtml(taskDisplayName) + '</td>' +
         '<td>' + (task.task_detail_name ? escapeHtml(taskDetailName) : taskDetailName) + '</td>' +
@@ -172,9 +172,9 @@ export function formatCompareText(
 
 export function computeChange(value: number, prev: number): { pct: number; up: boolean; text: string } {
   var compare = formatCompareText(value, prev, '', 'normal');
-  var delta = value - prev;
-  var pct = (prev && prev !== 0) ? Math.round((value - prev) / prev * 100) : 0;
-  return { pct: pct, up: delta >= 0, text: compare.text };
+  var pctMatch = compare.text.match(/([+-]?\d+)%/);
+  var pct = pctMatch ? parseInt(pctMatch[1], 10) : 0;
+  return { pct: isNaN(pct) ? 0 : pct, up: compare.cls !== 'down', text: compare.text };
 }
 
 // Smooth collapse/expand based on real scrollHeight. Avoids max-height:3000px snap.
