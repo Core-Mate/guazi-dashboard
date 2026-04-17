@@ -383,11 +383,16 @@
   .highlight-card::before {
     content: '';
     position: absolute;
-    top: 0; left: 12px; right: 12px;
-    height: 3px;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
     background: var(--accent-default);
-    border-radius: 0 0 2px 2px;
-    opacity: 0.9;
+    border-top-left-radius: var(--radius-card);
+    border-top-right-radius: var(--radius-card);
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    opacity: 1;
   }
   .highlight-card[data-key="complete"]::before,
   .highlight-card[data-key="success"]::before { background: var(--accent-success); }
