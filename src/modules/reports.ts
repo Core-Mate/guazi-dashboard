@@ -6,6 +6,13 @@ let currentReportBlob = null
 let currentReportDim = 'week'
 let roiPlatformChart = null
 
+function getLocalDateStr(d?: Date): string {
+  var date = d || new Date()
+  return date.getFullYear() + '-' +
+    String(date.getMonth() + 1).padStart(2, '0') + '-' +
+    String(date.getDate()).padStart(2, '0')
+}
+
 export function initROICard(_range?) {
   var numEl = document.getElementById('roiNumber');
   var descEl = document.getElementById('roiDesc');
@@ -149,23 +156,32 @@ function svgLine(labels: string[], data: number[], color: string, width: number,
   '</svg>';
 }
 
-function getReportDateRange(dim) {
-  var now = new Date();
-  var fmt = function(d) { return d.toISOString().slice(0, 10).replace(/-/g, '.'); };
+function getReportPeriod(dim) {
+  var now = new Date()
+  var startDate = ''
+  var endDate = ''
+
   if (dim === 'day') {
-    var yesterday = new Date(now.getTime() - 86400000);
-    return fmt(yesterday);
+    var yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)
+    startDate = getLocalDateStr(yesterday)
+    endDate = getLocalDateStr(yesterday)
+  } else if (dim === 'week') {
+    var dayOfWeek = now.getDay() || 7
+    var lastSunday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek)
+    var lastMonday = new Date(lastSunday.getFullYear(), lastSunday.getMonth(), lastSunday.getDate() - 6)
+    startDate = getLocalDateStr(lastMonday)
+    endDate = getLocalDateStr(lastSunday)
+  } else {
+    var firstOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1)
+    var lastOfPrev = new Date(firstOfThisMonth.getTime() - 86400000)
+    var firstOfPrev = new Date(lastOfPrev.getFullYear(), lastOfPrev.getMonth(), 1)
+    startDate = getLocalDateStr(firstOfPrev)
+    endDate = getLocalDateStr(lastOfPrev)
   }
-  if (dim === 'week') {
-    var dayOfWeek = now.getDay() || 7;
-    var lastSunday = new Date(now.getTime() - dayOfWeek * 86400000);
-    var lastMonday = new Date(lastSunday.getTime() - 6 * 86400000);
-    return fmt(lastMonday) + ' - ' + fmt(lastSunday);
-  }
-  // month: 上个完整自然月
-  var lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
-  var lastMonthStart = new Date(lastMonthEnd.getFullYear(), lastMonthEnd.getMonth(), 1);
-  return fmt(lastMonthStart) + ' - ' + fmt(lastMonthEnd);
+
+  var dateLabel = startDate.replace(/-/g, '.')
+  if (startDate !== endDate) dateLabel += ' - ' + endDate.replace(/-/g, '.')
+  return { startDate: startDate, endDate: endDate, dateLabel: dateLabel }
 }
 
 function betaOverlayHTML(badge?: string, sub?: string) {
@@ -177,10 +193,11 @@ function betaOverlayHTML(badge?: string, sub?: string) {
 
 async function buildReportHTML(dim) {
   var dimLabels = { day:'日报', week:'周报', month:'月报' };
-  var dimData = { day:'today', week:'7d', month:'30d' };
   var compareLabels = { day:'较昨日', week:'较上周', month:'较上月' };
-  var range = dimData[dim] || '7d';
-  var dateLabel = getReportDateRange(dim);
+  var reportPeriod = getReportPeriod(dim)
+  var range = 'custom';
+  var custom = { start: reportPeriod.startDate, end: reportPeriod.endDate };
+  var dateLabel = reportPeriod.dateLabel;
   var fallbackHighlights = [];
   var fallbackAchievements = [];
   var fallbackPlatformData = [];
@@ -503,14 +520,14 @@ async function buildReportHTML(dim) {
 
   var snap = null;
   try {
-    snap = await fetchDashboardData(range);
+    snap = await fetchDashboardData(range, custom);
   } catch (_err) {
     snap = null;
   }
 
-  var compareLabel = snap && snap.highlights && snap.highlights.compare_label
-    ? snap.highlights.compare_label
-    : (compareLabels[dim] || compareLabels.week);
+  var compareLabel = compareLabels[dim]
+    || (snap && snap.highlights && snap.highlights.compare_label)
+    || compareLabels.week;
   var highlightCards = snap && snap.highlights && safeArray(snap.highlights.cards).length
     ? snap.highlights.cards
     : fallbackHighlights;

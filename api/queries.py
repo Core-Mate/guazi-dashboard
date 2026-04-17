@@ -64,11 +64,11 @@ CATEGORY_META = {
 # 把 user_task.category (DB enum: taskcategory) 映射到 dashboard 三大组
 # DB enum 实际值: CONTENT_PUBLISH, SOCIAL_INTERACT, AUTO_REPLY, DATA_COLLECT, CUSTOM
 CATEGORY_GROUP = {
-    "CONTENT_PUBLISH": "ops",
+    "CONTENT_PUBLISH": "acquire",
     "SOCIAL_INTERACT": "acquire",
     "AUTO_REPLY": "acquire",
     "DATA_COLLECT": "research",
-    "CUSTOM": "research",
+    "CUSTOM": "ops",
 }
 
 TASK_GROUP_LABEL = {
@@ -77,13 +77,13 @@ TASK_GROUP_LABEL = {
     "ops": "运营协作",
 }
 
-ACQUIRE_TASK_PATTERN = re.compile(r"获客|私信|点赞|评论|触达|关注|线索|客户回复")
+ACQUIRE_TASK_PATTERN = re.compile(r"SOCIAL_INTERACT|AUTO_REPLY|CONTENT_PUBLISH", re.IGNORECASE)
 OPS_TASK_PATTERN = re.compile(r"发布|群发|自动回复|回复|发帖")
 
 
 def _infer_task_group(category: Any, task_name: Any) -> str:
     category_key = str(category or "").strip().upper()
-    if category_key and category_key != "CUSTOM":
+    if category_key:
         return CATEGORY_GROUP.get(category_key, "research")
 
     name = str(task_name or "")

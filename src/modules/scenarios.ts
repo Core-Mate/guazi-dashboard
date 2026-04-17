@@ -435,8 +435,10 @@ function mapSkillItems(items: any[], meta: any) {
     var tokenAvg = num(item.tokenAvg ?? item.token_avg ?? item.avg_cost ?? item.credits_avg)
     var totalCredits = num(item.totalCredits ?? item.total_credits ?? item.token_total ?? credits ?? tokenAvg * success)
     var durationSec = num(item.duration_sec ?? item.durationSec ?? item.total_duration_sec ?? item.avg_duration_sec)
+    var skillLabel = String(item.task_name ?? item.name ?? item.label ?? 'task').trim() || 'task'
+    var skillFallback = skillLabel.replace(/\s+/g, '-').slice(0, 12) + '-' + (index + 1)
     return {
-      skill: item.skill || item.key || item.id || meta.id.toUpperCase() + '-' + (index + 1),
+      skill: item.skill || item.key || item.id || skillFallback,
       skillName: item.skillName || item.skill_name || item.name || item.label || '未命名指令',
       description: item.description || '',
       exec: num(item.exec ?? item.executions ?? item.total_executions ?? success),
