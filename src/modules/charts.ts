@@ -46,7 +46,7 @@ import { renderAchievements } from './achievements'
 import { downloadCSV } from './export-utils'
 import { animateNumber } from './animate'
 import type { HighlightCard } from './api-integration'
-import { formatCompareText } from './utils'
+import { formatCompareText, getContentClampBounds } from './utils'
 
 let costChart, opsExecChart;
 let donutChartInstance = null;
@@ -668,10 +668,10 @@ function bindPopoutEvents(cards: HighlightCard[]) {
       popout.style.transform = '';
       requestAnimationFrame(function() {
         var r = popout.getBoundingClientRect();
-        var margin = 12;
+        var bounds = getContentClampBounds();
         var dx = 0;
-        if (r.left < margin) dx = margin - r.left;
-        else if (r.right > window.innerWidth - margin) dx = (window.innerWidth - margin) - r.right;
+        if (r.left < bounds.left) dx = bounds.left - r.left;
+        else if (r.right > bounds.right) dx = bounds.right - r.right;
         if (dx !== 0) {
           popout.style.transform = 'translateX(calc(-50% + ' + dx + 'px)) translateY(0)';
         }

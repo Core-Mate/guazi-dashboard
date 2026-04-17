@@ -1488,6 +1488,140 @@ async def get_accounts(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
     return result
 
 
+async def get_account_week_summary(pool: Pool, account_id: int, tenant_id: int) -> dict[str, Any]:
+    now = datetime.now(CN_TZ)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    cur_start = today_start - timedelta(days=6)
+    end_exclusive = today_start + timedelta(days=1)
+
+    account_row, summary_row, series_rows = await asyncio.gather(
+        pool.fetchrow(
+            """
+            SELECT
+                u.id,
+                u.name,
+                u.role,
+                COALESCE(platforms.platforms, ARRAY[]::text[]) AS platforms
+            FROM users u
+            LEFT JOIN LATERAL (
+                SELECT ARRAY_AGG(DISTINCT platform_key ORDER BY platform_key) AS platforms
+                FROM (
+                    SELECT CASE p.platform::text
+                        WHEN 'XIAOHONGSHU' THEN 'xhs'
+                        WHEN 'DOUYIN' THEN 'douyin'
+                        WHEN 'KUAISHOU' THEN 'kuaishou'
+                        WHEN 'WECHAT' THEN 'wechat'
+                        WHEN 'LARK' THEN 'lark'
+                        WHEN 'ZOOM' THEN 'zoom'
+                        WHEN 'LINKEDIN' THEN 'linkedin'
+                        WHEN 'INSTAGRAM' THEN 'instagram'
+                        WHEN 'TIKTOK' THEN 'tiktok'
+                        WHEN 'X' THEN 'x'
+                        WHEN 'REDDIT' THEN 'reddit'
+                        WHEN 'PINTEREST' THEN 'pinterest'
+                        WHEN 'GENERAL_APP' THEN 'general_app'
+                        ELSE LOWER(p.platform::text)
+                    END AS platform_key
+                    FROM user_task ut
+                    CROSS JOIN LATERAL UNNEST(COALESCE(ut.related_platforms, ARRAY[]::platformtype[])) AS p(platform)
+                    WHERE ut.user_id = u.id AND NOT ut.is_deleted
+                ) platform_rows
+            ) platforms ON TRUE
+            WHERE u.id = $1 AND u.tenant_id = $2 AND NOT u.is_deleted
+            """,
+            account_id,
+            tenant_id,
+        ),
+        pool.fetchrow(
+            f"""
+            SELECT
+                COUNT(te.id) FILTER (WHERE {_success_filter_sql('te')})::bigint AS complete,
+                COALESCE(SUM(ABS(cf.change_amount)) FILTER (WHERE cf.change_type = 'CONSUME'), 0)::bigint AS credits,
+                COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float / 3600 AS runtime_h,
+                COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach,
+                COALESCE(SUM(ebs.comment_count), 0)::bigint AS comment,
+                COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
+                COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
+                COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms
+            FROM users u
+            LEFT JOIN task_execution te ON te.user_id = u.id
+                AND COALESCE(te.finished_at, te.started_at) >= $3
+                AND COALESCE(te.finished_at, te.started_at) < $4
+                AND NOT te.is_deleted
+            LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
+            LEFT JOIN usage_record ur ON ur.task_id = te.id::varchar
+            LEFT JOIN credit_flow cf ON cf.ref_type = 'usage'
+                                     AND cf.ref_id ~ '^[0-9]+$'
+                                     AND CASE WHEN cf.ref_id ~ '^[0-9]+$' THEN cf.ref_id::int END = ur.id
+                                     AND cf.change_type = 'CONSUME'
+            WHERE u.id = $1 AND u.tenant_id = $2 AND NOT u.is_deleted
+            """,
+            account_id,
+            tenant_id,
+            cur_start,
+            end_exclusive,
+        ),
+        pool.fetch(
+            f"""
+            WITH series AS (
+                SELECT generate_series(
+                    DATE_TRUNC('day', $3::timestamptz AT TIME ZONE 'Asia/Shanghai'),
+                    DATE_TRUNC('day', (($4::timestamptz AT TIME ZONE 'Asia/Shanghai') - INTERVAL '1 microsecond')),
+                    INTERVAL '1 day'
+                ) AS bucket
+            ),
+            agg AS (
+                SELECT
+                    DATE_TRUNC('day', COALESCE(te.finished_at, te.started_at) AT TIME ZONE 'Asia/Shanghai') AS bucket,
+                    COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS complete
+                FROM task_execution te
+                JOIN users u ON u.id = te.user_id
+                WHERE u.id = $1
+                  AND u.tenant_id = $2
+                  AND COALESCE(te.finished_at, te.started_at) >= $3
+                  AND COALESCE(te.finished_at, te.started_at) < $4
+                  AND NOT te.is_deleted
+                  AND NOT u.is_deleted
+                GROUP BY bucket
+            )
+            SELECT s.bucket, COALESCE(a.complete, 0)::bigint AS complete
+            FROM series s
+            LEFT JOIN agg a ON a.bucket = s.bucket
+            ORDER BY s.bucket
+            """,
+            account_id,
+            tenant_id,
+            cur_start,
+            end_exclusive,
+        ),
+    )
+
+    if not account_row:
+        raise ValueError("account not found")
+
+    summary = dict(summary_row or {})
+    return {
+        "account": {
+            "id": str(account_row["id"]),
+            "name": account_row["name"] or f"user-{account_row['id']}",
+            "role": account_row["role"] or "",
+            "dept": "",
+            "platforms": list(account_row["platforms"] or []),
+        },
+        "summary": {
+            "complete": int(summary.get("complete") or 0),
+            "credits": int(summary.get("credits") or 0),
+            "runtime_h": round(float(summary.get("runtime_h") or 0), 1),
+            "reach": int(summary.get("reach") or 0),
+            "comment": int(summary.get("comment") or 0),
+            "likes": int(summary.get("likes") or 0),
+            "saves": int(summary.get("saves") or 0),
+            "dms": int(summary.get("dms") or 0),
+        },
+        "complete_series": [int(row["complete"] or 0) for row in series_rows],
+    }
+
+
 async def get_audit_log(pool: Pool, tenant_id: int, page: int = 1, page_size: int = 20) -> dict[str, Any]:
     offset = (page - 1) * page_size
     total = await pool.fetchval(

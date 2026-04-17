@@ -1,7 +1,7 @@
 import { fmtHM } from '../data/helpers'
 import { scenarioGroups, skillData, enabledScenarios } from '../data/scenarios'
 import { downloadCSV } from './export-utils'
-import { smoothToggleCollapse } from './utils'
+import { getContentClampBounds, smoothToggleCollapse } from './utils'
 
 var sortState: { col: string; dir: 'asc' | 'desc' } = { col: '', dir: 'asc' };
 var searchQuery = '';
@@ -39,11 +39,16 @@ function ensureSkillNameTip(): HTMLElement {
 
 function updateSkillNameTipPosition(e: MouseEvent): void {
   if (!skillNameTipEl) return
+  var bounds = getContentClampBounds()
   var left = e.clientX + 12
-  var maxLeft = Math.max(8, window.innerWidth - skillNameTipEl.offsetWidth - 8)
+  var maxLeft = Math.max(bounds.left, bounds.right - skillNameTipEl.offsetWidth)
   if (left > maxLeft) left = maxLeft
-  if (left < 8) left = 8
-  skillNameTipEl.style.top = (e.clientY - 40) + 'px'
+  if (left < bounds.left) left = bounds.left
+  var top = e.clientY - 40
+  var maxTop = Math.max(bounds.top, bounds.bottom - skillNameTipEl.offsetHeight)
+  if (top > maxTop) top = maxTop
+  if (top < bounds.top) top = bounds.top
+  skillNameTipEl.style.top = top + 'px'
   skillNameTipEl.style.left = left + 'px'
 }
 

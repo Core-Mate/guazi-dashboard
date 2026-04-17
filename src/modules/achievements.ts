@@ -1,5 +1,5 @@
 import { fetchDashboardData } from './api-integration'
-import { formatCompareText } from './utils'
+import { formatCompareText, getContentClampBounds } from './utils'
 
 function escapeAchievementText(value: any): string {
   return String(value == null ? '' : value)
@@ -85,8 +85,9 @@ function bindAchievementPopout(container: HTMLElement): void {
     active.innerHTML = src.innerHTML
     const r = tag.getBoundingClientRect()
     const W = active.offsetWidth || 280
+    const bounds = getContentClampBounds()
     let left = r.left + r.width / 2 - W / 2
-    left = Math.max(8, Math.min(left, window.innerWidth - W - 8))
+    left = Math.max(bounds.left, Math.min(left, bounds.right - W))
     active.style.left = left + 'px'
     active.style.top = (r.bottom + 8) + 'px'
     active.classList.add('visible')

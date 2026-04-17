@@ -182,6 +182,20 @@ async def api_get_accounts(
         return postgres_error_response(exc)
 
 
+@app.get("/api/accounts/{account_id}/week-summary")
+async def api_get_account_week_summary(
+    account_id: int,
+    tenant_id: int = Depends(require_api_key),
+    pool: Pool = Depends(db.get_pool),
+):
+    try:
+        return await get_queries_module().get_account_week_summary(pool, account_id, tenant_id)
+    except ValueError as exc:
+        return value_error_response(exc)
+    except asyncpg.PostgresError as exc:
+        return postgres_error_response(exc)
+
+
 class DistributeRequest(BaseModel):
     operator_id: int
     target_user_id: int

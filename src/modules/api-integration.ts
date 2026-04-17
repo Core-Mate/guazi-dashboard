@@ -440,6 +440,38 @@ export async function fetchTaskSummaries(tenantId?: string): Promise<any[]> {
   return Array.isArray(data) ? data : []
 }
 
+export interface AccountWeekSummary {
+  account: {
+    id: string;
+    name: string;
+    role: string;
+    dept: string;
+    platforms: string[];
+  };
+  summary: {
+    complete: number;
+    credits: number;
+    runtime_h: number;
+    reach: number;
+    comment: number;
+    likes: number;
+    saves: number;
+    dms: number;
+  };
+  complete_series: number[];
+}
+
+export async function fetchAccountWeekSummary(accountId: string, tenantId: string): Promise<AccountWeekSummary> {
+  var url = buildDashboardUrl('/api/accounts/' + encodeURIComponent(accountId) + '/week-summary', undefined, tenantId)
+  var resp = await fetch(url, {
+    headers: { 'X-API-Key': getDashboardApiKey() },
+  })
+  if (!resp.ok) {
+    throw new Error('HTTP ' + resp.status)
+  }
+  return await resp.json()
+}
+
 export async function tryLiveHighlights(range: string) {
   var snap = await fetchDashboardData(range);
   renderHighlightCards(snap.highlights.cards, range);

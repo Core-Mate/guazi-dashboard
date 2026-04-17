@@ -209,3 +209,23 @@ export function smoothToggleCollapse(body: HTMLElement | null, chev?: HTMLElemen
   }
   if (chev) chev.classList.toggle('open');
 }
+
+export function getContentClampBounds(): { left: number; right: number; top: number; bottom: number } {
+  const content = document.querySelector('.content') as HTMLElement | null
+  const margin = 12
+  if (!content) {
+    return {
+      left: margin,
+      right: window.innerWidth - margin,
+      top: margin,
+      bottom: window.innerHeight - margin,
+    }
+  }
+  const r = content.getBoundingClientRect()
+  return {
+    left: r.left + margin,
+    right: r.right - margin,
+    top: r.top + margin,
+    bottom: r.bottom - margin,
+  }
+}
