@@ -221,6 +221,20 @@ function buildTrendAxisTitle(text) {
   };
 }
 
+function syncOpsTrendYAxisMax(chart: any) {
+  var yAxis = chart && chart.options && chart.options.scales ? chart.options.scales.y : null;
+  if (!yAxis) return;
+  var allValues = (chart.data.datasets || [])
+    .flatMap(function(ds: any) { return ds && Array.isArray(ds.data) ? ds.data : []; })
+    .filter(function(v: any) { return typeof v === 'number' && isFinite(v); });
+  var maxVal = Math.max(...allValues, 0);
+  if (maxVal === 0) {
+    yAxis.max = 1;
+  } else {
+    delete yAxis.max;
+  }
+}
+
 function sanitizeTrendValues(values) {
   return (values || []).map(function(value) {
     var num = Number(value);
@@ -330,6 +344,7 @@ export function applyTrendDisplayMode(range?: string) {
   }
 
   applyFutureHourMask(costChart, { labels: costChart.data.labels }, trendRange);
+  if (activeCount <= 1) syncOpsTrendYAxisMax(costChart);
   costChart.update();
 }
 
