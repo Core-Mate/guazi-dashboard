@@ -1190,14 +1190,14 @@ tr.row-new {
   width: 48px;
   height: 48px;
   border-radius: 50%;
-  border: 3px solid rgba(255, 255, 255, 0.15);
-  border-top-color: #6366f1;
+  border: 3px solid rgba(0, 0, 0, 0.1);
+  border-top-color: var(--accent-default, #3b82f6);
   animation: globalLoaderSpin 0.9s linear infinite;
 }
 .global-loader .loader-text {
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.78);
-  letter-spacing: 1px;
+  font-size: 14px;
+  color: #6b7280;
+  letter-spacing: 0;
 }
 @keyframes globalLoaderSpin {
   to { transform: rotate(360deg); }
