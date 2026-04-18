@@ -398,6 +398,7 @@ export function drawSparkline(canvas, data, color) {
   canvas.height = Math.round(cssH * dpr);
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
   const strokeColor = color || 'rgba(59,130,246,0.9)';
   const max = Math.max(...data);
   const min = Math.min(...data);
