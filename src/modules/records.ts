@@ -6,7 +6,7 @@ import {
 import { membersData } from '../data/members'
 import { fetchAuditLog, fetchTransactions } from './api-integration'
 import { downloadCSV } from './export-utils'
-import { pTag } from './utils'
+import { pTag, runWithButtonLoading } from './utils'
 
 export let paginationState = { transactions: {page:1,pageSize:20,dateStart:'',dateEnd:''}, oplog: {page:1,pageSize:20,dateStart:'',dateEnd:''} }
 export var txSortKey: 'time' | 'member' | 'type' = 'time'
@@ -601,6 +601,12 @@ export function renderRecordTab(tab) {
 
 function csvVal(v) { return (v === undefined || v === null || v === '') ? 'N/A' : v }
 
+function getCurrentActionButton() {
+  var evt = typeof window !== 'undefined' ? (window.event as Event | undefined) : undefined
+  var target = evt && evt.target ? evt.target as HTMLElement : null
+  return target ? target.closest('button') as HTMLButtonElement | null : null
+}
+
 async function fetchAllTransactionItems(filters?) {
   var firstPageSize = 100
   var first = await fetchTransactions(1, firstPageSize, filters)
@@ -635,22 +641,28 @@ async function fetchAllOplogItems(filters?) {
   return { items: items, total: total }
 }
 
-export async function exportTransactions() {
-  var data = await fetchAllTransactionItems(buildTransactionsFilterQuery())
-  var headers = ['时间', '成员', '类型', '说明', '变动', '余额']
-  var rows = data.items.map(function(item) {
-    return [csvVal(item.time), csvVal(item.member), csvVal(item.type), csvVal(item.desc), csvVal(item.change), csvVal(item.balance)]
+export async function exportTransactions(btn?: HTMLButtonElement) {
+  var b = btn || getCurrentActionButton() || document.querySelector('#recordTab-transactions .toolbar-right .btn-action') as HTMLButtonElement | null
+  return runWithButtonLoading(b, '导出中...', async function() {
+    var data = await fetchAllTransactionItems(buildTransactionsFilterQuery())
+    var headers = ['时间', '成员', '类型', '说明', '变动', '余额']
+    var rows = data.items.map(function(item) {
+      return [csvVal(item.time), csvVal(item.member), csvVal(item.type), csvVal(item.desc), csvVal(item.change), csvVal(item.balance)]
+    })
+    downloadCSV('交易历史_' + new Date().toISOString().slice(0,10) + '.csv', headers, rows)
   })
-  downloadCSV('交易历史_' + new Date().toISOString().slice(0,10) + '.csv', headers, rows)
 }
 
-export async function exportOplog() {
-  var data = await fetchAllOplogItems(buildOplogFilterQuery())
-  var headers = ['时间', '操作人', '操作类型', '详情', '结果']
-  var rows = data.items.map(function(item) {
-    return [csvVal(item.time), csvVal(item.operator), csvVal(item.action), csvVal(item.target), csvVal(item.result)]
+export async function exportOplog(btn?: HTMLButtonElement) {
+  var b = btn || getCurrentActionButton() || document.querySelector('#recordTab-oplog .toolbar-right .btn-action') as HTMLButtonElement | null
+  return runWithButtonLoading(b, '导出中...', async function() {
+    var data = await fetchAllOplogItems(buildOplogFilterQuery())
+    var headers = ['时间', '操作人', '操作类型', '详情', '结果']
+    var rows = data.items.map(function(item) {
+      return [csvVal(item.time), csvVal(item.operator), csvVal(item.action), csvVal(item.target), csvVal(item.result)]
+    })
+    downloadCSV('操作日志_' + new Date().toISOString().slice(0,10) + '.csv', headers, rows)
   })
-  downloadCSV('操作日志_' + new Date().toISOString().slice(0,10) + '.csv', headers, rows)
 }
 
 Object.assign(window as any, {

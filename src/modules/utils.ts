@@ -229,3 +229,24 @@ export function getContentClampBounds(): { left: number; right: number; top: num
     bottom: r.bottom - margin,
   }
 }
+
+export async function runWithButtonLoading<T>(
+  btn: HTMLButtonElement | null,
+  loadingText: string,
+  action: () => Promise<T>
+): Promise<T | undefined> {
+  if (!btn) return action()
+  if (btn.classList.contains('btn-loading')) return
+  const orig = btn.textContent || ''
+  const origHtml = btn.innerHTML
+  btn.disabled = true
+  btn.classList.add('btn-loading')
+  btn.textContent = loadingText
+  try { return await action() }
+  finally {
+    btn.disabled = false
+    btn.classList.remove('btn-loading')
+    if (origHtml) btn.innerHTML = origHtml
+    else btn.textContent = orig
+  }
+}

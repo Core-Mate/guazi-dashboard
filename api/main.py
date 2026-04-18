@@ -111,17 +111,70 @@ async def _warmup() -> None:
         queries = get_queries_module()
         for tenant_id in _get_warmup_tenant_ids():
             for range_value in WARMUP_RANGES:
-                try:
-                    snapshot = await queries.aggregate_snapshot(pool, tenant_id, range_value)
-                    _prime_dashboard_component_caches(tenant_id, range_value, None, None, snapshot)
+                cache_key = _dashboard_cache_key(tenant_id, range_value, None, None)
+                warmers = (
+                    (
+                        "snapshot",
+                        lambda t=tenant_id, rr=range_value: queries.aggregate_snapshot(pool, t, rr),
+                    ),
+                    (
+                        "highlights",
+                        lambda t=tenant_id, rr=range_value, ck=cache_key: _cached_dashboard_payload(
+                            _dashboard_highlights_cache,
+                            _dashboard_highlights_lock,
+                            ck,
+                            lambda tt=t, rr2=rr: _load_dashboard_highlights_bundle(pool, tt, rr2, None, None),
+                        ),
+                    ),
+                    (
+                        "charts",
+                        lambda t=tenant_id, rr=range_value, ck=cache_key: _cached_dashboard_payload(
+                            _dashboard_charts_cache,
+                            _dashboard_charts_lock,
+                            ck,
+                            lambda tt=t, rr2=rr: queries.aggregate_charts(pool, tt, rr2, None, None),
+                        ),
+                    ),
+                    (
+                        "aggs",
+                        lambda t=tenant_id, rr=range_value, ck=cache_key: _cached_dashboard_payload(
+                            _dashboard_aggs_cache,
+                            _dashboard_aggs_lock,
+                            ck,
+                            lambda tt=t, rr2=rr: queries.aggregate_aggregations(pool, tt, rr2, None, None),
+                        ),
+                    ),
+                    (
+                        "ops_trend",
+                        lambda t=tenant_id, rr=range_value, ck=cache_key: _cached_dashboard_payload(
+                            _dashboard_ops_trend_cache,
+                            _dashboard_ops_trend_lock,
+                            ck,
+                            lambda tt=t, rr2=rr: _load_dashboard_ops_trend(pool, tt, rr2, None, None),
+                        ),
+                    ),
+                )
+                results = await asyncio.gather(
+                    *(warmer() for _, warmer in warmers),
+                    return_exceptions=True,
+                )
+                failures = [
+                    (name, result)
+                    for (name, _), result in zip(warmers, results)
+                    if isinstance(result, Exception)
+                ]
+                if failures:
+                    for name, exc in failures:
+                        logger.error(
+                            "Dashboard %s warmup failed for tenant_id=%s range=%s",
+                            name,
+                            tenant_id,
+                            range_value,
+                            exc_info=(type(exc), exc, exc.__traceback__),
+                        )
+                else:
                     logger.info(
-                        "Dashboard snapshot warmup completed for tenant_id=%s range=%s",
-                        tenant_id,
-                        range_value,
-                    )
-                except Exception:
-                    logger.exception(
-                        "Dashboard snapshot warmup failed for tenant_id=%s range=%s",
+                        "Dashboard warmup completed for tenant_id=%s range=%s",
                         tenant_id,
                         range_value,
                     )

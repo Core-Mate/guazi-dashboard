@@ -1575,3 +1575,45 @@ tr.skeleton-row td {
 .table-wrap {
   position: relative;
 }
+button.btn-loading {
+  pointer-events: none;
+  opacity: 0.7;
+  cursor: wait;
+  position: relative;
+  padding-left: 32px !important;
+}
+button.btn-loading::before {
+  content: '';
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(0, 0, 0, 0.12);
+  border-top-color: var(--accent-default, #3b82f6);
+  border-radius: 50%;
+  animation: globalLoaderSpin 0.9s linear infinite;
+}
+
+.detail-card-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 40px 20px;
+  min-height: 180px;
+}
+.detail-card-loading .loader-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid rgba(0, 0, 0, 0.1);
+  border-top-color: var(--accent-default, #3b82f6);
+  border-radius: 50%;
+  animation: globalLoaderSpin 0.9s linear infinite;
+}
+.detail-card-loading .loader-text {
+  font-size: 12px;
+  color: var(--color-text-2, #475569);
+}

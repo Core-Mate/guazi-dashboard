@@ -161,7 +161,7 @@ function renderAccountHoverLoading(row: HTMLElement, accountId: string) {
   var metrics = card.querySelector('.account-hover-metrics') as HTMLElement | null
   var spark = card.querySelector('.account-hover-spark') as HTMLCanvasElement | null
   var caption = card.querySelector('.account-hover-caption') as HTMLElement | null
-  if (metrics) metrics.innerHTML = '<div style="padding:12px 0;width:100%;text-align:center;color:var(--color-text-2);font-size:12px;">加载中...</div>'
+  if (metrics) metrics.innerHTML = '<div class="detail-card-loading"><div class="loader-spinner"></div><div class="loader-text">加载中...</div></div>'
   if (spark) spark.style.display = 'none'
   if (caption) caption.textContent = ''
   positionAccountHoverCard(card, row)
