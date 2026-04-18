@@ -469,8 +469,36 @@ export interface AccountWeekSummary {
   complete_series: number[];
 }
 
+export interface TaskWeekSummary {
+  task_info: {
+    id: number;
+    name: string;
+    category: 'acquire' | 'ops' | string;
+    created_at: string;
+    platforms: string[];
+  };
+  summary: {
+    complete: number;
+    credits: number;
+    runtime_h: number;
+    reach: number;
+  };
+  complete_series: number[];
+}
+
 export async function fetchAccountWeekSummary(accountId: string, tenantId: string): Promise<AccountWeekSummary> {
   var url = buildDashboardUrl('/api/accounts/' + encodeURIComponent(accountId) + '/week-summary', undefined, tenantId)
+  var resp = await fetch(url, {
+    headers: { 'X-API-Key': getDashboardApiKey() },
+  })
+  if (!resp.ok) {
+    throw new Error('HTTP ' + resp.status)
+  }
+  return await resp.json()
+}
+
+export async function fetchTaskWeekSummary(taskId: string): Promise<TaskWeekSummary> {
+  var url = buildDashboardUrl('/api/tasks/' + encodeURIComponent(taskId) + '/week-summary')
   var resp = await fetch(url, {
     headers: { 'X-API-Key': getDashboardApiKey() },
   })

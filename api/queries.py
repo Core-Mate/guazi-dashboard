@@ -879,7 +879,8 @@ async def aggregate_aggregations(
         if group_key not in groups:
             group_key = "ops"
         skill_item = {
-            "skill_id": f"S{r['skill_id']}",
+            "skill_id": int(r["skill_id"]),
+            "skill_code": f"S{r['skill_id']}",
             "skill_name": r["skill_name"],
             "description": r["description"] or "",
             "category": r["category"],
@@ -2032,6 +2033,178 @@ async def get_account_week_summary(pool: Pool, account_id: int, tenant_id: int) 
             "likes": int(summary.get("likes") or 0),
             "saves": int(summary.get("saves") or 0),
             "dms": int(summary.get("dms") or 0),
+        },
+        "complete_series": [int(row["complete"] or 0) for row in series_rows],
+    }
+
+
+async def get_task_week_summary(pool: Pool, task_id: int, tenant_id: int) -> dict[str, Any]:
+    now = datetime.now(CN_TZ)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    cur_start = today_start - timedelta(days=6)
+    end_exclusive = today_start + timedelta(days=1)
+
+    task_row, summary_row, series_rows = await asyncio.gather(
+        pool.fetchrow(
+            """
+            SELECT
+                ut.id,
+                ut.task_name AS name,
+                ut.created_at,
+                COALESCE(platforms.platforms, ARRAY[]::text[]) AS platforms
+            FROM user_task ut
+            JOIN users u ON u.id = ut.user_id
+            LEFT JOIN LATERAL (
+                SELECT ARRAY_AGG(DISTINCT platform_key ORDER BY platform_key) AS platforms
+                FROM (
+                    SELECT CASE p.platform::text
+                        WHEN 'XIAOHONGSHU' THEN 'xhs'
+                        WHEN 'DOUYIN' THEN 'douyin'
+                        WHEN 'KUAISHOU' THEN 'kuaishou'
+                        WHEN 'WECHAT' THEN 'wechat'
+                        WHEN 'LARK' THEN 'lark'
+                        WHEN 'ZOOM' THEN 'zoom'
+                        WHEN 'LINKEDIN' THEN 'linkedin'
+                        WHEN 'INSTAGRAM' THEN 'instagram'
+                        WHEN 'TIKTOK' THEN 'tiktok'
+                        WHEN 'X' THEN 'x'
+                        WHEN 'REDDIT' THEN 'reddit'
+                        WHEN 'PINTEREST' THEN 'pinterest'
+                        WHEN 'GENERAL_APP' THEN 'general_app'
+                        ELSE LOWER(p.platform::text)
+                    END AS platform_key
+                    FROM UNNEST(COALESCE(ut.related_platforms, ARRAY[]::platformtype[])) AS p(platform)
+                ) platform_rows
+            ) platforms ON TRUE
+            WHERE ut.id = $1
+              AND u.tenant_id = $2
+              AND NOT ut.is_deleted
+              AND NOT u.is_deleted
+            """,
+            task_id,
+            tenant_id,
+        ),
+        pool.fetchrow(
+            f"""
+            WITH task_te_agg AS (
+                SELECT
+                    COUNT(te.id) FILTER (WHERE {_success_filter_sql('te')})::bigint AS complete,
+                    COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float / 3600 AS runtime_h,
+                    COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach,
+                    COALESCE(SUM(ebs.comment_count), 0)::bigint AS comment,
+                    COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
+                    COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
+                    COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
+                    BOOL_OR(
+                        COALESCE(ebs.unique_reach, 0) > 0
+                        OR COALESCE(ebs.comment_count, 0) > 0
+                        OR COALESCE(ebs.like_count, 0) > 0
+                        OR COALESCE(ebs.collect_count, 0) > 0
+                        OR COALESCE(ebs.dm_count, 0) > 0
+                    ) AS has_engagement
+                FROM task_execution te
+                JOIN user_task ut ON ut.id = te.task_id
+                JOIN users u ON u.id = te.user_id
+                LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
+                WHERE te.task_id = $1
+                  AND u.tenant_id = $2
+                  AND COALESCE(te.finished_at, te.started_at) >= $3
+                  AND COALESCE(te.finished_at, te.started_at) < $4
+                  AND NOT ut.is_deleted
+                  AND NOT te.is_deleted
+                  AND NOT u.is_deleted
+            ),
+            task_credit_agg AS (
+                SELECT
+                    COALESCE(SUM(ur.credits_used), 0)::bigint AS credits
+                FROM task_execution te
+                JOIN user_task ut ON ut.id = te.task_id
+                JOIN users u ON u.id = te.user_id
+                LEFT JOIN usage_record ur
+                    -- schema mismatch: usage_record.task_id is varchar while task_execution.id is int; a future migration should align these column types.
+                    ON ur.task_id = te.id::varchar
+                WHERE te.task_id = $1
+                  AND u.tenant_id = $2
+                  AND COALESCE(ur.end_time, ur.start_time, ur.created_at) >= $3
+                  AND COALESCE(ur.end_time, ur.start_time, ur.created_at) < $4
+                  AND NOT ut.is_deleted
+                  AND NOT te.is_deleted
+                  AND NOT u.is_deleted
+            )
+            SELECT
+                COALESCE(task_te_agg.complete, 0)::bigint AS complete,
+                COALESCE(task_credit_agg.credits, 0)::bigint AS credits,
+                COALESCE(task_te_agg.runtime_h, 0)::float AS runtime_h,
+                COALESCE(task_te_agg.reach, 0)::bigint AS reach,
+                COALESCE(task_te_agg.comment, 0)::bigint AS comment,
+                COALESCE(task_te_agg.likes, 0)::bigint AS likes,
+                COALESCE(task_te_agg.saves, 0)::bigint AS saves,
+                COALESCE(task_te_agg.dms, 0)::bigint AS dms,
+                COALESCE(task_te_agg.has_engagement, FALSE) AS has_engagement
+            FROM task_te_agg
+            CROSS JOIN task_credit_agg
+            """,
+            task_id,
+            tenant_id,
+            cur_start,
+            end_exclusive,
+        ),
+        pool.fetch(
+            f"""
+            WITH date_buckets AS (
+                SELECT generate_series(
+                    DATE_TRUNC('day', $3::timestamptz AT TIME ZONE 'Asia/Shanghai'),
+                    DATE_TRUNC('day', (($4::timestamptz AT TIME ZONE 'Asia/Shanghai') - INTERVAL '1 microsecond')),
+                    INTERVAL '1 day'
+                ) AS bucket
+            ),
+            task_te_agg AS (
+                SELECT
+                    DATE_TRUNC('day', COALESCE(te.finished_at, te.started_at) AT TIME ZONE 'Asia/Shanghai') AS bucket,
+                    COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS complete
+                FROM task_execution te
+                JOIN user_task ut ON ut.id = te.task_id
+                JOIN users u ON u.id = te.user_id
+                WHERE te.task_id = $1
+                  AND u.tenant_id = $2
+                  AND COALESCE(te.finished_at, te.started_at) >= $3
+                  AND COALESCE(te.finished_at, te.started_at) < $4
+                  AND NOT ut.is_deleted
+                  AND NOT te.is_deleted
+                  AND NOT u.is_deleted
+                GROUP BY bucket
+            )
+            SELECT d.bucket, COALESCE(a.complete, 0)::bigint AS complete
+            FROM date_buckets d
+            LEFT JOIN task_te_agg a ON a.bucket = d.bucket
+            ORDER BY d.bucket
+            """,
+            task_id,
+            tenant_id,
+            cur_start,
+            end_exclusive,
+        ),
+    )
+
+    if not task_row:
+        raise ValueError("task not found")
+
+    summary = dict(summary_row or {})
+    created_at_value = task_row["created_at"]
+    created_at = created_at_value.isoformat() if created_at_value else ""
+    return {
+        "task_info": {
+            "id": int(task_row["id"]),
+            "name": task_row["name"] or f"task-{task_row['id']}",
+            "category": "acquire" if summary.get("has_engagement") else "ops",
+            "created_at": created_at,
+            "platforms": list(task_row["platforms"] or []),
+        },
+        "summary": {
+            "complete": int(summary.get("complete") or 0),
+            "credits": int(summary.get("credits") or 0),
+            "runtime_h": round(float(summary.get("runtime_h") or 0), 1),
+            "reach": int(summary.get("reach") or 0),
         },
         "complete_series": [int(row["complete"] or 0) for row in series_rows],
     }

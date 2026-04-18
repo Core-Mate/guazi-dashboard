@@ -1446,7 +1446,8 @@ tbody tr:hover,
   .highlight-value     { font-size: clamp(20px, 0.8vw + 10px, 26px); }
 }
 
-.account-hover-card {
+.account-hover-card,
+.task-detail-card {
   position: fixed;
   min-width: 280px;
   max-width: 360px;
@@ -1463,18 +1464,29 @@ tbody tr:hover,
   flex-direction: column;
   gap: 12px;
 }
-.account-hover-card.visible {
+.account-hover-card.visible,
+.task-detail-card.visible {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);
 }
-.account-hover-head { display: flex; gap: 12px; align-items: center; }
-.account-hover-avatar { width: 40px; height: 40px; border-radius: 50%; background: #f4f4f5; display: flex; align-items: center; justify-content: center; font-weight: 700; color: var(--color-text-2); }
-.account-hover-name { font-weight: 600; font-size: 14px; color: var(--color-text-1); }
-.account-hover-meta { font-size: 12px; color: var(--color-text-2); margin-top: 2px; }
-.account-hover-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding: 8px 0; border-top: 1px solid var(--color-border-soft); border-bottom: 1px solid var(--color-border-soft); }
-.account-hover-metrics .metric { display: flex; flex-direction: column; align-items: center; }
-.account-hover-metrics .metric .v { font-family: var(--font-num); font-weight: 600; font-size: 16px; color: var(--color-text-1); font-feature-settings: "tnum"; }
-.account-hover-metrics .metric .k { font-size: 11px; color: var(--color-text-2); margin-top: 2px; }
-.account-hover-spark { width: 100%; height: 48px; }
-.account-hover-caption { font-size: 11px; color: var(--color-text-3); text-align: right; }
+.account-hover-head,
+.task-detail-head { display: flex; gap: 12px; align-items: center; }
+.account-hover-avatar,
+.task-detail-avatar { width: 40px; height: 40px; border-radius: 50%; background: #f4f4f5; display: flex; align-items: center; justify-content: center; font-weight: 700; color: var(--color-text-2); }
+.account-hover-name,
+.task-detail-name { font-weight: 600; font-size: 14px; color: var(--color-text-1); }
+.account-hover-meta,
+.task-detail-meta { font-size: 12px; color: var(--color-text-2); margin-top: 2px; }
+.account-hover-metrics,
+.task-detail-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding: 8px 0; border-top: 1px solid var(--color-border-soft); border-bottom: 1px solid var(--color-border-soft); }
+.account-hover-metrics .metric,
+.task-detail-metrics .metric { display: flex; flex-direction: column; align-items: center; }
+.account-hover-metrics .metric .v,
+.task-detail-metrics .metric .v { font-family: var(--font-num); font-weight: 600; font-size: 16px; color: var(--color-text-1); font-feature-settings: "tnum"; }
+.account-hover-metrics .metric .k,
+.task-detail-metrics .metric .k { font-size: 11px; color: var(--color-text-2); margin-top: 2px; }
+.account-hover-spark,
+.task-detail-spark { width: 100%; height: 48px; }
+.account-hover-caption,
+.task-detail-caption { font-size: 11px; color: var(--color-text-3); text-align: right; }
