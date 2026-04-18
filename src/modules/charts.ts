@@ -60,6 +60,23 @@ let _highlightPopoutViewportBound = false;
 let _highlightPopoutCleanup: (() => void) | null = null;
 let lastOpsData: any = null;
 let rawSeries: Record<string, number[]> = {};
+let opsRangeContainer: HTMLElement | null = null;
+let opsRangeOverlay: HTMLElement | null = null;
+let opsRangeShade: HTMLElement | null = null;
+let opsRangeStartLine: HTMLElement | null = null;
+let opsRangeEndLine: HTMLElement | null = null;
+let opsRangeSummary: HTMLElement | null = null;
+let opsRangePeriod: HTMLElement | null = null;
+let opsRangeValues: HTMLElement | null = null;
+let opsRangeDelta: HTMLElement | null = null;
+let opsRangeClose: HTMLButtonElement | null = null;
+let opsRangeCanvas: HTMLCanvasElement | null = null;
+let opsRangeCanvasCleanup: (() => void) | null = null;
+let opsRangeDocBound = false;
+let opsRangeDragging = false;
+let opsRangeDragStartX = 0;
+let opsRangeStartIdx = -1;
+let opsRangeEndIdx = -1;
 
 function escapeHtml(value) {
   return String(value == null ? '' : value)
@@ -76,6 +93,286 @@ function formatTrendLabel(value) {
   return value.length > 10
     ? value.substring(11, 13) + ':00'
     : value.slice(5).replace('-', '/');
+}
+
+function getOpsChartContainer() {
+  var chartEl = document.getElementById('opsTaskChart') as HTMLCanvasElement | null;
+  return chartEl ? chartEl.parentElement as HTMLElement | null : null;
+}
+
+function ensureOpsRangeSelectionUi() {
+  var container = getOpsChartContainer();
+  if (!container) return null;
+  opsRangeContainer = container;
+
+  var overlay = container.querySelector('.range-select-overlay') as HTMLElement | null;
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.className = 'range-select-overlay';
+    var shade = document.createElement('div');
+    shade.className = 'select-shade';
+    var startLine = document.createElement('div');
+    startLine.className = 'select-line select-line-start';
+    var endLine = document.createElement('div');
+    endLine.className = 'select-line select-line-end';
+    overlay.appendChild(shade);
+    overlay.appendChild(startLine);
+    overlay.appendChild(endLine);
+    container.appendChild(overlay);
+    shade.style.display = 'none';
+    startLine.style.display = 'none';
+    endLine.style.display = 'none';
+  }
+
+  var summary = container.querySelector('.range-compare-summary') as HTMLElement | null;
+  if (!summary) {
+    summary = document.createElement('div');
+    summary.className = 'range-compare-summary';
+
+    var period = document.createElement('div');
+    period.className = 'range-compare-period';
+    var values = document.createElement('div');
+    values.className = 'range-compare-values';
+    var delta = document.createElement('div');
+    delta.className = 'range-compare-delta flat';
+    var close = document.createElement('button');
+    close.className = 'range-compare-close';
+    close.type = 'button';
+    close.setAttribute('aria-label', '关闭区间对比');
+    close.textContent = '×';
+
+    summary.appendChild(period);
+    summary.appendChild(values);
+    summary.appendChild(delta);
+    summary.appendChild(close);
+    container.appendChild(summary);
+  }
+
+  opsRangeOverlay = overlay;
+  opsRangeShade = overlay.querySelector('.select-shade') as HTMLElement | null;
+  opsRangeStartLine = overlay.querySelector('.select-line-start') as HTMLElement | null;
+  opsRangeEndLine = overlay.querySelector('.select-line-end') as HTMLElement | null;
+  opsRangeSummary = summary;
+  opsRangePeriod = summary.querySelector('.range-compare-period') as HTMLElement | null;
+  opsRangeValues = summary.querySelector('.range-compare-values') as HTMLElement | null;
+  opsRangeDelta = summary.querySelector('.range-compare-delta') as HTMLElement | null;
+  opsRangeClose = summary.querySelector('.range-compare-close') as HTMLButtonElement | null;
+
+  if (opsRangeClose && !(opsRangeClose as any).__rangeBound) {
+    (opsRangeClose as any).__rangeBound = true;
+    opsRangeClose.addEventListener('click', function(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      clearOpsRangeSelection();
+      hideOpsRangeCompareSummary();
+    });
+  }
+
+  return container;
+}
+
+function clampTrendIndex(index, length) {
+  if (!length) return 0;
+  var next = Math.round(Number(index) || 0);
+  if (next < 0) return 0;
+  if (next > length - 1) return length - 1;
+  return next;
+}
+
+function clampCanvasOffsetX(canvas: HTMLCanvasElement, value: number) {
+  var width = canvas.clientWidth || canvas.width || 0;
+  if (value < 0) return 0;
+  if (value > width) return width;
+  return value;
+}
+
+function formatRangeCompareValue(value) {
+  var num = Number(value || 0);
+  if (!isFinite(num)) return '0';
+  if (Math.abs(num - Math.round(num)) < 0.001) return Math.round(num).toLocaleString();
+  return num.toLocaleString(undefined, { maximumFractionDigits: 1 });
+}
+
+function buildRangeCompareDeltaText(cur: number, prev: number, label: string) {
+  var compare = formatCompareText(cur, prev, label);
+  var deltaText = compare.text;
+  if (/%/.test(deltaText) && compare.cls !== 'flat') {
+    var absDelta = Math.round(Math.abs(cur - prev)).toLocaleString();
+    deltaText = (compare.cls === 'down' ? '↓ 减少 ' : '↑ 增加 ') + absDelta;
+  } else if (label) {
+    deltaText = deltaText.replace(label, '').replace(/\s{2,}/g, ' ').trim();
+  }
+  return { cls: compare.cls, text: deltaText };
+}
+
+function getPrimaryTrendKey() {
+  var activeKeys = getActiveTrendKeys();
+  return activeKeys.length ? activeKeys[0] : 'tasks';
+}
+
+function getTrendDatasetByKey(key) {
+  if (!costChart || !costChart.data || !Array.isArray(costChart.data.datasets)) return null;
+  return costChart.data.datasets.find(function(dataset: any) {
+    return getTrendKeyFromDataset(dataset) === key;
+  }) || null;
+}
+
+function hideOpsRangeCompareSummary() {
+  if (opsRangeSummary) opsRangeSummary.classList.remove('visible');
+}
+
+function clearOpsRangeSelection() {
+  opsRangeDragging = false;
+  opsRangeDragStartX = 0;
+  opsRangeStartIdx = -1;
+  opsRangeEndIdx = -1;
+  if (opsRangeShade) opsRangeShade.style.display = 'none';
+  if (opsRangeStartLine) opsRangeStartLine.style.display = 'none';
+  if (opsRangeEndLine) opsRangeEndLine.style.display = 'none';
+}
+
+function resetOpsRangeCompare() {
+  clearOpsRangeSelection();
+  hideOpsRangeCompareSummary();
+}
+
+function updateOpsRangeOverlay(startIdx, endIdx) {
+  if (!costChart || !ensureOpsRangeSelectionUi()) return;
+  var xScale = costChart.scales && costChart.scales.x;
+  if (!xScale || !opsRangeShade || !opsRangeStartLine || !opsRangeEndLine) return;
+  var startX = Number(xScale.getPixelForValue(startIdx));
+  var endX = Number(xScale.getPixelForValue(endIdx));
+  if (!isFinite(startX) || !isFinite(endX)) {
+    clearOpsRangeSelection();
+    return;
+  }
+  var left = Math.min(startX, endX);
+  var right = Math.max(startX, endX);
+  opsRangeShade.style.display = 'block';
+  opsRangeShade.style.left = left + 'px';
+  opsRangeShade.style.width = Math.max(right - left, 1) + 'px';
+  opsRangeStartLine.style.display = 'block';
+  opsRangeStartLine.style.left = startX + 'px';
+  opsRangeEndLine.style.display = 'block';
+  opsRangeEndLine.style.left = endX + 'px';
+}
+
+function renderRangeCompareSummary(startIdx, endIdx) {
+  if (!costChart || !ensureOpsRangeSelectionUi() || !opsRangeSummary || !opsRangePeriod || !opsRangeValues || !opsRangeDelta) return;
+  var labels = Array.isArray(costChart.data.labels) ? costChart.data.labels : [];
+  if (!labels.length) return;
+
+  var safeStart = clampTrendIndex(startIdx, labels.length);
+  var safeEnd = clampTrendIndex(endIdx, labels.length);
+  var metricKey = getPrimaryTrendKey();
+  var metricMeta = keyToSeries[metricKey] || keyToSeries.tasks;
+  var dataset = getTrendDatasetByKey(metricKey);
+  var values = rawSeries[metricKey] && rawSeries[metricKey].length
+    ? rawSeries[metricKey]
+    : (dataset && Array.isArray(dataset.data) ? dataset.data : []);
+  var startVal = Number(values[safeStart] || 0);
+  var endVal = Number(values[safeEnd] || 0);
+  var compare = buildRangeCompareDeltaText(endVal, startVal, metricMeta.label);
+  var pct = startVal > 0 ? Math.round((endVal - startVal) / startVal * 100) : 0;
+  var pctText = '（' + (pct > 0 ? '+' : '') + pct + '%）';
+
+  opsRangePeriod.textContent = String(labels[safeStart] || '') + ' → ' + String(labels[safeEnd] || '');
+  opsRangeValues.textContent = metricMeta.label + ' ' + formatRangeCompareValue(startVal) + ' → ' + formatRangeCompareValue(endVal);
+  opsRangeDelta.className = 'range-compare-delta ' + compare.cls;
+  opsRangeDelta.textContent = compare.text + pctText;
+  opsRangeSummary.classList.add('visible');
+}
+
+function bindOpsRangeSelection(chart: any) {
+  if (!chart) return;
+  var canvas = chart.canvas as HTMLCanvasElement | null;
+  if (!canvas) return;
+  ensureOpsRangeSelectionUi();
+
+  if (!opsRangeDocBound) {
+    opsRangeDocBound = true;
+    document.addEventListener('keydown', function(event) {
+      if (event.key !== 'Escape') return;
+      clearOpsRangeSelection();
+      hideOpsRangeCompareSummary();
+    });
+  }
+
+  if (opsRangeCanvas === canvas && opsRangeCanvasCleanup) return;
+  if (opsRangeCanvasCleanup) {
+    opsRangeCanvasCleanup();
+    opsRangeCanvasCleanup = null;
+  }
+
+  var getLabels = function() {
+    return costChart && Array.isArray(costChart.data.labels) ? costChart.data.labels : [];
+  };
+
+  var onMouseDown = function(event: MouseEvent) {
+    if (event.button !== 0 || !costChart) return;
+    var labels = getLabels();
+    var xScale = costChart.scales && costChart.scales.x;
+    if (!labels.length || !xScale) return;
+    ensureOpsRangeSelectionUi();
+    hideOpsRangeCompareSummary();
+    opsRangeDragging = true;
+    opsRangeDragStartX = event.offsetX;
+    opsRangeStartIdx = clampTrendIndex(xScale.getValueForPixel(event.offsetX), labels.length);
+    opsRangeEndIdx = opsRangeStartIdx;
+    updateOpsRangeOverlay(opsRangeStartIdx, opsRangeEndIdx);
+  };
+
+  var onMouseMove = function(event: MouseEvent) {
+    if (!opsRangeDragging || !costChart) return;
+    var labels = getLabels();
+    var xScale = costChart.scales && costChart.scales.x;
+    if (!labels.length || !xScale) return;
+    opsRangeEndIdx = clampTrendIndex(xScale.getValueForPixel(event.offsetX), labels.length);
+    updateOpsRangeOverlay(opsRangeStartIdx, opsRangeEndIdx);
+  };
+
+  var onMouseUp = function(event: MouseEvent) {
+    if (!opsRangeDragging || !costChart) return;
+    var labels = getLabels();
+    var xScale = costChart.scales && costChart.scales.x;
+    if (!labels.length || !xScale) {
+      clearOpsRangeSelection();
+      return;
+    }
+
+    var endX = typeof event.offsetX === 'number' && event.target === canvas
+      ? event.offsetX
+      : event.clientX - canvas.getBoundingClientRect().left;
+    endX = clampCanvasOffsetX(canvas, endX);
+    var distance = Math.abs(endX - opsRangeDragStartX);
+    opsRangeEndIdx = clampTrendIndex(xScale.getValueForPixel(endX), labels.length);
+    opsRangeDragging = false;
+
+    if (distance < 8) {
+      clearOpsRangeSelection();
+      hideOpsRangeCompareSummary();
+      return;
+    }
+
+    var startIdx = Math.min(opsRangeStartIdx, opsRangeEndIdx);
+    var endIdx = Math.max(opsRangeStartIdx, opsRangeEndIdx);
+    updateOpsRangeOverlay(startIdx, endIdx);
+    renderRangeCompareSummary(startIdx, endIdx);
+  };
+
+  canvas.addEventListener('mousedown', onMouseDown);
+  canvas.addEventListener('mousemove', onMouseMove);
+  canvas.addEventListener('mouseup', onMouseUp);
+  document.addEventListener('mouseup', onMouseUp);
+
+  opsRangeCanvas = canvas;
+  opsRangeCanvasCleanup = function() {
+    canvas.removeEventListener('mousedown', onMouseDown);
+    canvas.removeEventListener('mousemove', onMouseMove);
+    canvas.removeEventListener('mouseup', onMouseUp);
+    document.removeEventListener('mouseup', onMouseUp);
+    if (opsRangeCanvas === canvas) opsRangeCanvas = null;
+  };
 }
 
 function isHourlyTrendLabels(labels: any[]): boolean {
@@ -338,6 +635,7 @@ function getTrendTooltipLabel(context) {
 
 export function applyTrendDisplayMode(range?: string) {
   if (!costChart) return;
+  resetOpsRangeCompare();
   var trendRange = range || currentRange;
   var activeKeys = getActiveTrendKeys();
   var activeCount = activeKeys.length;
@@ -847,6 +1145,7 @@ export function ensureOpsCharts() {
   if (!el) return;
   var ctx = el.getContext('2d');
   if (!ctx) return;
+  resetOpsRangeCompare();
   costChart = new Chart(ctx, {
     type:'line',
     data:{ labels: d.labels, datasets: buildTrendDatasets() as any },
@@ -867,6 +1166,7 @@ export function ensureOpsCharts() {
       },
     } as any
   });
+  bindOpsRangeSelection(costChart);
   applyTrendDisplayMode(currentRange);
   getTrendToggles().forEach(function(toggle) {
     if ((toggle as any).__trendBound) return;
@@ -884,8 +1184,10 @@ export function updateCharts(range: string, opsData?: any) {
   var d = getOpsChartData(currentRange, opsData || lastOpsData);
   if (!d) return;
   rebuildRawSeries(d);
+  resetOpsRangeCompare();
   var setIf = function(id, val) { var el = document.getElementById(id); if (el) el.textContent = val; };
   if (costChart) {
+    bindOpsRangeSelection(costChart);
     costChart.data.labels = d.labels;
     costChart.data.datasets = buildTrendDatasets() as any;
     if (costChart.options && costChart.options.scales) {
