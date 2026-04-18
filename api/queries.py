@@ -488,6 +488,16 @@ async def aggregate_aggregations(
             SELECT ut.id AS skill_id,
                    ut.task_name AS skill_name,
                    ut.category,
+                   CASE
+                       WHEN (
+                           COALESCE(SUM(ebs.comment_count), 0) +
+                           COALESCE(SUM(ebs.like_count), 0) +
+                           COALESCE(SUM(ebs.collect_count), 0) +
+                           COALESCE(SUM(ebs.dm_count), 0) +
+                           COALESCE(SUM(ebs.unique_reach), 0)
+                       ) > 0 THEN 'acquire'
+                       ELSE 'ops'
+                   END AS task_group,
                    ut.related_platforms,
                    ut.task_description AS description,
                    COUNT(te.id)::bigint AS exec_count,
@@ -629,7 +639,7 @@ async def aggregate_aggregations(
         "credits": sum(a["token_used"] for a in accounts),
     }
 
-    # 按 category 分组
+    # 按 execution_behavior_stat 行为数据动态分组
     groups: dict[str, dict[str, Any]] = {}
     for k, meta in CATEGORY_META.items():
         groups[k] = {
@@ -642,12 +652,15 @@ async def aggregate_aggregations(
         }
 
     for r in skill_rows:
-        group_key = CATEGORY_GROUP.get(r["category"] or "", "research")
+        group_key = str(r["task_group"] or "ops")
+        if group_key not in groups:
+            group_key = "ops"
         skill_item = {
             "skill_id": f"S{r['skill_id']}",
             "skill_name": r["skill_name"],
             "description": r["description"] or "",
             "category": r["category"],
+            "task_group": group_key,
             "exec": int(r["exec_count"]),
             "success_count": int(r["success_count"]),
             "fail": int(r["fail_count"]),
