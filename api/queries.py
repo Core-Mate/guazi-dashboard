@@ -122,7 +122,7 @@ def _resolve_window(
         cur_end = cur_start + timedelta(days=1)
         prev_start = cur_start - timedelta(days=1)
         prev_end = cur_start
-        return (cur_start, cur_end, prev_start, prev_end, "较前日", "day", 1)
+        return (cur_start, cur_end, prev_start, prev_end, "较前日", "hour", 24)
 
     if range_param == "7d":
         cur_start = today_start - timedelta(days=6)
