@@ -69,7 +69,6 @@ let opsRangeSummary: HTMLElement | null = null;
 let opsRangePeriod: HTMLElement | null = null;
 let opsRangeValues: HTMLElement | null = null;
 let opsRangeDelta: HTMLElement | null = null;
-let opsRangeClose: HTMLButtonElement | null = null;
 let opsRangeCanvas: HTMLCanvasElement | null = null;
 let opsRangeCanvasCleanup: (() => void) | null = null;
 let opsRangeDocBound = false;
@@ -135,18 +134,18 @@ function ensureOpsRangeSelectionUi() {
     values.className = 'range-compare-values';
     var delta = document.createElement('div');
     delta.className = 'range-compare-delta flat';
-    var close = document.createElement('button');
-    close.className = 'range-compare-close';
-    close.type = 'button';
-    close.setAttribute('aria-label', '关闭区间对比');
-    close.textContent = '×';
 
     summary.appendChild(period);
     summary.appendChild(values);
     summary.appendChild(delta);
-    summary.appendChild(close);
     container.appendChild(summary);
   }
+
+  summary.style.position = 'fixed';
+  summary.style.top = '12px';
+  summary.style.right = '12px';
+  summary.style.left = 'auto';
+  summary.style.bottom = 'auto';
 
   opsRangeOverlay = overlay;
   opsRangeShade = overlay.querySelector('.select-shade') as HTMLElement | null;
@@ -156,17 +155,8 @@ function ensureOpsRangeSelectionUi() {
   opsRangePeriod = summary.querySelector('.range-compare-period') as HTMLElement | null;
   opsRangeValues = summary.querySelector('.range-compare-values') as HTMLElement | null;
   opsRangeDelta = summary.querySelector('.range-compare-delta') as HTMLElement | null;
-  opsRangeClose = summary.querySelector('.range-compare-close') as HTMLButtonElement | null;
-
-  if (opsRangeClose && !(opsRangeClose as any).__rangeBound) {
-    (opsRangeClose as any).__rangeBound = true;
-    opsRangeClose.addEventListener('click', function(event) {
-      event.preventDefault();
-      event.stopPropagation();
-      clearOpsRangeSelection();
-      hideOpsRangeCompareSummary();
-    });
-  }
+  var staleClose = summary.querySelector('.range-compare-close') as HTMLElement | null;
+  if (staleClose) staleClose.remove();
 
   return container;
 }
@@ -354,38 +344,28 @@ function bindOpsRangeSelection(chart: any) {
     var labels = getLabels();
     var xScale = costChart.scales && costChart.scales.x;
     if (!labels.length || !xScale) return;
-    opsRangeEndIdx = clampTrendIndex(xScale.getValueForPixel(event.offsetX), labels.length);
+    var x = clampCanvasOffsetX(canvas, event.offsetX);
+    opsRangeEndIdx = clampTrendIndex(xScale.getValueForPixel(x), labels.length);
     updateOpsRangeOverlay(opsRangeStartIdx, opsRangeEndIdx);
+    if (Math.abs(x - opsRangeDragStartX) < 4) {
+      hideOpsRangeCompareSummary();
+      return;
+    }
+    var startIdx = Math.min(opsRangeStartIdx, opsRangeEndIdx);
+    var endIdx = Math.max(opsRangeStartIdx, opsRangeEndIdx);
+    renderRangeCompareSummary(startIdx, endIdx);
   };
 
   var onMouseUp = function(event: MouseEvent) {
     if (!opsRangeDragging || !costChart) return;
+    opsRangeDragging = false;
+    opsRangeDragStartX = 0;
+    opsRangeStartIdx = -1;
+    opsRangeEndIdx = -1;
+    clearOpsRangeOverlay();
+    hideOpsRangeCompareSummary();
     setOpsRangeTooltipEnabled(costChart, true);
-    var labels = getLabels();
-    var xScale = costChart.scales && costChart.scales.x;
-    if (!labels.length || !xScale) {
-      clearOpsRangeSelection();
-      return;
-    }
-
-    var endX = typeof event.offsetX === 'number' && event.target === canvas
-      ? event.offsetX
-      : event.clientX - canvas.getBoundingClientRect().left;
-    endX = clampCanvasOffsetX(canvas, endX);
-    var distance = Math.abs(endX - opsRangeDragStartX);
-    opsRangeEndIdx = clampTrendIndex(xScale.getValueForPixel(endX), labels.length);
-
-    if (distance < 8) {
-      clearOpsRangeSelection();
-      hideOpsRangeCompareSummary();
-      return;
-    }
-
-    var startIdx = Math.min(opsRangeStartIdx, opsRangeEndIdx);
-    var endIdx = Math.max(opsRangeStartIdx, opsRangeEndIdx);
-    updateOpsRangeOverlay(startIdx, endIdx);
-    renderRangeCompareSummary(startIdx, endIdx);
-    clearOpsRangeSelection();
+    costChart.update('none');
   };
 
   canvas.addEventListener('mousedown', onMouseDown);
