@@ -152,7 +152,12 @@
           <label class="chart-toggle" data-key="reach"><span class="toggle-dot" style="background:#0ea5e9"></span> 触达量 (人)</label>
           <label class="chart-toggle" data-key="credits"><span class="toggle-dot" style="background:#ea580c"></span> 算力豆 (颗)</label>
         </div>
+        <div class="chart-view-toggle">
+          <button class="chart-view-btn active" data-view="2d">2D</button>
+          <button class="chart-view-btn" data-view="ridge">脊线图</button>
+        </div>
         <div class="chart-container" style="height:200px;"><canvas id="opsTaskChart"></canvas></div>
+        <div id="opsRidgelineContainer" style="display:none;width:100%;min-height:440px;"></div>
       </div>
     </div>
 

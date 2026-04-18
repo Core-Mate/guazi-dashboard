@@ -19,7 +19,8 @@ import { openDistributeToMember, openDistributeModal, confirmDistribute, renderO
 import { initROICard, generateReport, closeReportPreview, saveReportImage, switchReportDim, renderROIPlatformCard, renderRoiFromCharts } from './modules/reports'
 import { renderAccountMetricsTable, searchAccount, exportAccountCSV, renderAccountsFromAggs } from './modules/accounts'
 import { initCustomDropdowns } from './modules/dropdown'
-import { hideLoader } from './modules/loader'
+import { showLoader, hideLoader } from './modules/loader'
+import { bindRidgelineToggle, refreshRidgeline } from './modules/ridgeline-bind'
 import { pTag, initFilters, renderTaskTable, animateAllNumbers, getToday, getStatNum, setStatNum, prependTransaction, formatCompareText } from './modules/utils'
 import { tryLiveMembers, tryLiveWallet, tryLiveTransactions, tryLiveOpsData, populateMemberFilter, fetchDashboardData, applyBetaOverlays } from './modules/api-integration'
 import { PLATFORM_BREAKDOWN } from './data/platforms'
@@ -148,6 +149,8 @@ function renderStatChange(id: string, cur: number, prev: number | null | undefin
 async function bootDashboardSnapshot(range = '7d', custom?: { start: string; end: string }) {
   var currentRange = range
   var snap = await fetchDashboardData(range, custom)
+  ;(window as any).__lastSnap = snap
+  refreshRidgeline((window as any).__lastSnap)
   renderHighlightCards(snap.highlights.cards, range)
   renderAchievements(snap.achievements.achievements)
   if (snap.charts?.mini_stats) applyMiniStats(snap.charts.mini_stats, range, snap.highlights)
@@ -196,6 +199,7 @@ document.addEventListener('keydown', function(e) {
 
 // Init
 document.addEventListener('DOMContentLoaded', async function() {
+  showLoader({ immediate: true })
   var initialRange = '7d'
   // Safety net: always schedule loader hide even if init throws.
   // Actual hide happens after data render; this is the fallback.
@@ -239,5 +243,6 @@ document.addEventListener('DOMContentLoaded', async function() {
   var __loaderEl = document.getElementById('globalLoader');
   if (__loaderEl) __loaderEl.classList.add('hidden');
   hideLoader();
+  bindRidgelineToggle();
   animateAllNumbers();
 })
