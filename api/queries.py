@@ -67,7 +67,7 @@ CATEGORY_GROUP = {
     "CONTENT_PUBLISH": "acquire",
     "SOCIAL_INTERACT": "acquire",
     "AUTO_REPLY": "acquire",
-    "DATA_COLLECT": "research",
+    "DATA_COLLECT": "ops",
     "CUSTOM": "ops",
 }
 
