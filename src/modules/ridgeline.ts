@@ -2,7 +2,7 @@ import { max, range } from 'd3-array'
 import { axisBottom } from 'd3-axis'
 import { scaleLinear } from 'd3-scale'
 import { select, type Selection } from 'd3-selection'
-import { area, curveBasis, line } from 'd3-shape'
+import { area, curveBasis } from 'd3-shape'
 
 export interface RidgelineSeries {
   key: string
@@ -11,8 +11,8 @@ export interface RidgelineSeries {
   values: number[]
 }
 
-const ROW_H = 70
-const OVERLAP = 0.3
+const ROW_H = 52
+const OVERLAP = 0.35
 const LEFT_PAD = 120
 const BOTTOM_PAD = 30
 const TOP_PAD = 10
@@ -54,12 +54,16 @@ export class Ridgeline {
   }
 
   private init() {
-    this.container.style.background = '#0f172a'
+    this.container.style.position = 'relative'
+    this.container.style.background = `
+  linear-gradient(180deg, rgba(15,23,42,0.7) 0%, rgba(15,23,42,1) 100%),
+  url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.1  0 0 0 0 0.12  0 0 0 0 0.15  0 0 0 0.4 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>")
+`
+    this.container.style.backgroundColor = '#0f172a'
     this.container.style.borderRadius = '10px'
     this.container.style.overflow = 'hidden'
     this.container.style.padding = '20px'
     this.container.style.boxShadow = '0 0 0 1px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04)'
-    this.container.style.position = 'relative'
   }
 
   setData(labels: string[], seriesList: RidgelineSeries[]) {
@@ -140,22 +144,10 @@ export class Ridgeline {
         .y1(function(value) { return yScale(value) })
         .curve(curveBasis)
 
-      var linePath = line<number>()
-        .x(function(_value, valueIndex) { return xScale(valueIndex) })
-        .y(function(value) { return yScale(value) })
-        .curve(curveBasis)
-
       svg.append('path')
         .datum(values)
         .attr('d', areaPath as any)
         .attr('fill', 'url(#' + gradientId + ')')
-
-      svg.append('path')
-        .datum(values)
-        .attr('d', linePath as any)
-        .attr('fill', 'none')
-        .attr('stroke', 'rgba(255, 255, 255, 0.35)')
-        .attr('stroke-width', 1)
 
       svg.append('text')
         .attr('x', LEFT_PAD - 14)
