@@ -93,8 +93,8 @@ function bindAchievementPopout(container: HTMLElement): void {
     active.classList.add('visible')
   }
   const hide = () => { if (active) active.classList.remove('visible') }
-  if (!document.dataset.achieveEscBound) {
-    document.dataset.achieveEscBound = '1'
+  if (!(window as any).__achieveEscBound) {
+    (window as any).__achieveEscBound = true
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && active && active.classList.contains('visible')) hide()
     })

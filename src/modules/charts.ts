@@ -668,8 +668,8 @@ function bindPopoutEvents(cards: HighlightCard[]) {
   if (!grid) return;
   ensureHighlightPopoutViewportListeners();
   hideHighlightPopout();
-  if (!document.dataset.chartPopoutEscBound) {
-    document.dataset.chartPopoutEscBound = '1';
+  if (!(window as any).__chartPopoutEscBound) {
+    (window as any).__chartPopoutEscBound = true;
     document.addEventListener('keydown', function(e: KeyboardEvent) {
       if (e.key === 'Escape' && _activeHighlightPopoutIdx !== -1) hideHighlightPopout();
     });

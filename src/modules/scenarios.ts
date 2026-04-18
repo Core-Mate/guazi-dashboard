@@ -346,8 +346,8 @@ function bindSkillNamePopout(container: HTMLElement): void {
   tipContainer.__tipBound = true
   window.addEventListener('scroll', function() { hideSkillNameTip() }, true)
   window.addEventListener('resize', function() { hideSkillNameTip() })
-  if (!document.dataset.skillTipEscBound) {
-    document.dataset.skillTipEscBound = '1'
+  if (!(window as any).__skillTipEscBound) {
+    (window as any).__skillTipEscBound = true
     document.addEventListener('keydown', function(e: KeyboardEvent) {
       if (e.key === 'Escape' && skillNameTipEl && skillNameTipEl.classList.contains('visible')) hideSkillNameTip()
     })

@@ -197,6 +197,12 @@ document.addEventListener('keydown', function(e) {
 // Init
 document.addEventListener('DOMContentLoaded', async function() {
   var initialRange = '7d'
+  // Safety net: always schedule loader hide even if init throws.
+  // Actual hide happens after data render; this is the fallback.
+  window.setTimeout(function() {
+    var el = document.getElementById('globalLoader')
+    if (el && !el.classList.contains('hidden')) el.classList.add('hidden')
+  }, 4000);
   initROICard();
   renderROIPlatformCard();
   createCharts();
@@ -229,6 +235,11 @@ document.addEventListener('DOMContentLoaded', async function() {
   // Populate member filter dropdown with live data
   populateMemberFilter();
 
+  // Force-hide preloader regardless of pendingCount balance
+  // (some setRange/boot paths can drift the counter; for the initial
+  // boot we want a hard guarantee the overlay goes away)
+  var __loaderEl = document.getElementById('globalLoader');
+  if (__loaderEl) __loaderEl.classList.add('hidden');
   hideLoader();
   animateAllNumbers();
 })
