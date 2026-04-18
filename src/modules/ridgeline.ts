@@ -13,9 +13,10 @@ export interface RidgelineSeries {
 
 const ROW_H = 52
 const OVERLAP = 0.35
-const LEFT_PAD = 120
-const BOTTOM_PAD = 30
-const TOP_PAD = 10
+const LEFT_PAD = 100
+const RIGHT_PAD = 40
+const BOTTOM_PAD = 32
+const TOP_PAD = 18
 
 function normalizeValues(values: any[], pointCount: number): number[] {
   var normalized = Array.isArray(values) ? values.slice(0, pointCount) : []
@@ -62,7 +63,7 @@ export class Ridgeline {
     this.container.style.backgroundColor = '#0f172a'
     this.container.style.borderRadius = '10px'
     this.container.style.overflow = 'hidden'
-    this.container.style.padding = '20px'
+    this.container.style.padding = '0'
     this.container.style.boxShadow = '0 0 0 1px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04)'
   }
 
@@ -71,7 +72,7 @@ export class Ridgeline {
     this.rawSeriesList = seriesList
 
     var seriesCount = seriesList.length
-    var totalHeight = ROW_H * seriesCount * (1 - OVERLAP) + ROW_H * OVERLAP + BOTTOM_PAD + 20
+    var totalHeight = ROW_H * seriesCount * (1 - OVERLAP) + ROW_H * OVERLAP + BOTTOM_PAD + TOP_PAD
     var pointCount = seriesList.reduce(function(acc, series) {
       return Math.max(acc, Array.isArray(series.values) ? series.values.length : 0)
     }, labels.length)
@@ -79,22 +80,24 @@ export class Ridgeline {
       Math.floor(this.container.getBoundingClientRect().width || this.container.clientWidth || 0),
       LEFT_PAD + 180
     )
-    var plotRight = width - 24
     var step = ROW_H * (1 - OVERLAP)
     var axisY = totalHeight - BOTTOM_PAD
+    var tickTextY = totalHeight - BOTTOM_PAD / 2 - 4
     var resolvedLabels = range(pointCount).map(function(index) {
       return labels[index] || String(index + 1)
     })
     var xScale = scaleLinear()
       .domain([0, pointCount > 1 ? pointCount - 1 : 1])
-      .range([LEFT_PAD, plotRight])
+      .range([LEFT_PAD, width - RIGHT_PAD])
+
+    this.container.style.minHeight = totalHeight + 'px'
 
     this.container.innerHTML = ''
 
     var root = select(this.container)
     var svg = root
       .append('svg')
-      .attr('width', width)
+      .attr('width', '100%')
       .attr('height', totalHeight)
       .attr('viewBox', '0 0 ' + width + ' ' + totalHeight)
       .attr('preserveAspectRatio', 'xMidYMid meet')
@@ -150,7 +153,7 @@ export class Ridgeline {
         .attr('fill', 'url(#' + gradientId + ')')
 
       svg.append('text')
-        .attr('x', LEFT_PAD - 14)
+        .attr('x', LEFT_PAD - 16)
         .attr('y', yOffset + ROW_H / 2)
         .attr('fill', 'rgba(226, 232, 240, 0.85)')
         .attr('font-size', '12px')
@@ -174,6 +177,7 @@ export class Ridgeline {
       .attr('stroke', '#334155')
 
     axisGroup.selectAll('text')
+      .attr('y', tickTextY - axisY)
       .attr('fill', 'rgba(148, 163, 184, 0.6)')
       .style('font-size', '10px')
 
