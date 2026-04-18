@@ -54,44 +54,11 @@ let donutChartInstance = null;
 let interactionDonutInstance = null;
 let currentRange = '7d';
 let _popoutChart = null;
-let _inlinePopoutCharts: Record<number, Chart> = {};
-let _currentHighlightCards: HighlightCard[] = [];
-let _popoutMediaListenerBound = false;
+let _highlightFloatingPopout: HTMLElement | null = null;
+let _activeHighlightPopoutIdx = -1;
+let _highlightPopoutViewportBound = false;
 let lastOpsData: any = null;
 let rawSeries: Record<string, number[]> = {};
-
-function isWideScreen(): boolean {
-  return window.matchMedia('(min-width: 1600px)').matches;
-}
-
-function debounced150ms(fn: () => void) {
-  let timeout: ReturnType<typeof window.setTimeout> | null = null;
-  return function() {
-    if (timeout !== null) window.clearTimeout(timeout);
-    timeout = window.setTimeout(function() {
-      timeout = null;
-      fn();
-    }, 150);
-  };
-}
-
-function destroyInlinePopoutCharts() {
-  Object.values(_inlinePopoutCharts).forEach(function(chart) {
-    chart.destroy();
-  });
-  _inlinePopoutCharts = {};
-}
-
-function ensurePopoutMediaListener() {
-  if (_popoutMediaListenerBound) return;
-  const mql = window.matchMedia('(min-width: 1600px)');
-  mql.addEventListener('change', debounced150ms(() => {
-    destroyInlinePopoutCharts();
-    if (_popoutChart) { _popoutChart.destroy(); _popoutChart = null; }
-    bindPopoutEvents(_currentHighlightCards);
-  }));
-  _popoutMediaListenerBound = true;
-}
 
 function escapeHtml(value) {
   return String(value == null ? '' : value)
@@ -568,31 +535,34 @@ function destroyPopoutChart() {
   if (_popoutChart) { _popoutChart.destroy(); _popoutChart = null; }
 }
 
-function positionHighlightPopout(popout: HTMLElement, card: HTMLElement) {
+function ensureHighlightPopoutViewportListeners() {
+  if (_highlightPopoutViewportBound) return;
+  window.addEventListener('scroll', hideHighlightPopout, true);
+  window.addEventListener('resize', hideHighlightPopout);
+  _highlightPopoutViewportBound = true;
+}
+
+function hideHighlightPopout() {
+  if (_highlightFloatingPopout) {
+    _highlightFloatingPopout.classList.remove('visible');
+  }
+  _activeHighlightPopoutIdx = -1;
+  destroyPopoutChart();
+}
+
+function positionFloatingPopout(popout: HTMLElement, card: HTMLElement) {
+  const r = card.getBoundingClientRect();
+  const W = popout.offsetWidth || 320;
   const bounds = getContentClampBounds();
-  const cardRect = card.getBoundingClientRect();
-  const anchorLeft = cardRect.left + cardRect.width / 2;
-  const anchorTop = cardRect.bottom + 8;
-
-  popout.style.left = anchorLeft + 'px';
-  popout.style.top = anchorTop + 'px';
-  popout.style.transform = 'translateX(-50%) translateY(0)';
-
-  requestAnimationFrame(function() {
-    const r = popout.getBoundingClientRect();
-    let dx = 0;
-    if (r.left < bounds.left) dx = bounds.left - r.left;
-    else if (r.right > bounds.right) dx = bounds.right - r.right;
-    if (dx !== 0) {
-      popout.style.transform = 'translateX(calc(-50% + ' + dx + 'px)) translateY(0)';
-    }
-  });
+  let left = r.left + r.width / 2 - W / 2;
+  left = Math.max(bounds.left, Math.min(left, bounds.right - W));
+  popout.style.left = left + 'px';
+  popout.style.top = (r.bottom + 8) + 'px';
 }
 
 export function renderHighlightCards(cards: HighlightCard[], range?, customLen?) {
   const grid = document.getElementById('highlightGrid');
   if (!grid) return;
-  _currentHighlightCards = cards.slice();
   var compareLabel = getCompareLabel(range || currentRange || '7d', customLen);
 
   var existingCards = grid.querySelectorAll('.highlight-card');
@@ -675,39 +645,43 @@ export function renderHighlightCards(cards: HighlightCard[], range?, customLen?)
 function bindPopoutEvents(cards: HighlightCard[]) {
   var grid = document.getElementById('highlightGrid');
   if (!grid) return;
-  ensurePopoutMediaListener();
-  destroyInlinePopoutCharts();
-  destroyPopoutChart();
-  var wide = isWideScreen();
-  grid.querySelectorAll('.highlight-card').forEach(function(card, i) {
+  ensureHighlightPopoutViewportListeners();
+  hideHighlightPopout();
+
+  const show = function(card: HTMLElement, idx: number) {
+    const tmpl = card.querySelector('.highlight-popout') as HTMLElement | null;
+    if (!tmpl) return;
+
+    if (!_highlightFloatingPopout) {
+      _highlightFloatingPopout = tmpl.cloneNode(true) as HTMLElement;
+      _highlightFloatingPopout.className = 'highlight-popout-floating';
+      document.body.appendChild(_highlightFloatingPopout);
+    } else if (_activeHighlightPopoutIdx !== idx) {
+      destroyPopoutChart();
+      _highlightFloatingPopout.innerHTML = tmpl.innerHTML;
+    }
+
+    _activeHighlightPopoutIdx = idx;
+
+    const canvas = _highlightFloatingPopout.querySelector('canvas') as HTMLCanvasElement | null;
+    const item = cards[idx];
+    if (canvas && item) {
+      canvas.id = 'popout-canvas-floating-' + idx;
+      createPopoutChart(canvas, item, SPARK_COLORS[idx] || '#6366f1');
+    }
+
+    positionFloatingPopout(_highlightFloatingPopout, card);
+    _highlightFloatingPopout.classList.add('visible');
+  };
+
+  grid.querySelectorAll('.highlight-card').forEach(function(card, idx) {
     var el = card as HTMLElement;
-    var color = SPARK_COLORS[i] || '#6366f1';
-    var canvas = document.getElementById('popout-canvas-' + i) as HTMLCanvasElement;
-    var item = cards[i];
-    var statsGrid = el.querySelector('.highlight-card-stats-grid') as HTMLElement;
-    if (statsGrid) statsGrid.hidden = wide;
+    var statsGrid = el.querySelector('.highlight-card-stats-grid') as HTMLElement | null;
+    if (statsGrid) statsGrid.hidden = true;
     el.onmouseenter = null;
     el.onmouseleave = null;
-    if (wide) {
-      var chart = canvas && item ? buildPopoutChart(canvas, item, color) : null;
-      if (chart) _inlinePopoutCharts[i] = chart;
-      return;
-    }
-    el.onmouseenter = function() {
-      if (canvas && item) createPopoutChart(canvas, item, color);
-      var popout = el.querySelector('.highlight-popout') as HTMLElement | null;
-      if (!popout) return;
-      positionHighlightPopout(popout, el);
-    };
-    el.onmouseleave = function() {
-      destroyPopoutChart();
-      var popout = el.querySelector('.highlight-popout') as HTMLElement | null;
-      if (popout) {
-        popout.style.left = '';
-        popout.style.top = '';
-        popout.style.transform = '';
-      }
-    };
+    el.onmouseenter = function() { show(el, idx); };
+    el.onmouseleave = hideHighlightPopout;
   });
 }
 

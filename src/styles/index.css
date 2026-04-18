@@ -430,22 +430,25 @@
 
   /* ── hover popout panel ── */
   .highlight-popout {
+    display: none;
+  }
+  .highlight-popout-floating {
     position: fixed;
     top: 0;
     left: 0;
-    transform: translateX(-50%) translateY(4px);
+    transform: translateY(-4px);
     width: clamp(260px, 20vw + 80px, 420px);
     background: #fff;
     border: 1px solid #e4e4e7;
     border-radius: 12px;
     padding: 14px 16px 12px;
     box-shadow: 0 12px 40px rgba(0,0,0,0.13), 0 2px 8px rgba(0,0,0,0.06);
-    z-index: 100;
+    z-index: 1000;
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.18s ease, transform 0.18s ease;
   }
-  .highlight-popout::before {
+  .highlight-popout-floating::before {
     content: '';
     position: absolute;
     top: -5px;
@@ -456,10 +459,10 @@
     border-left: 1px solid #e4e4e7;
     border-top: 1px solid #e4e4e7;
   }
-  .highlight-card:hover .highlight-popout {
+  .highlight-popout-floating.visible {
     opacity: 1;
-    transform: translateX(-50%) translateY(0);
     pointer-events: auto;
+    transform: translateY(0);
   }
   .highlight-popout-chart { height: 130px; margin-bottom: 8px; }
   .highlight-popout-stats {
