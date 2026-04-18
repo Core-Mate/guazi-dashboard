@@ -221,14 +221,18 @@ function hideOpsRangeCompareSummary() {
   if (opsRangeSummary) opsRangeSummary.classList.remove('visible');
 }
 
+function clearOpsRangeOverlay() {
+  if (opsRangeShade) opsRangeShade.style.display = 'none';
+  if (opsRangeStartLine) opsRangeStartLine.style.display = 'none';
+  if (opsRangeEndLine) opsRangeEndLine.style.display = 'none';
+}
+
 function clearOpsRangeSelection() {
+  clearOpsRangeOverlay();
   opsRangeDragging = false;
   opsRangeDragStartX = 0;
   opsRangeStartIdx = -1;
   opsRangeEndIdx = -1;
-  if (opsRangeShade) opsRangeShade.style.display = 'none';
-  if (opsRangeStartLine) opsRangeStartLine.style.display = 'none';
-  if (opsRangeEndLine) opsRangeEndLine.style.display = 'none';
 }
 
 function resetOpsRangeCompare() {
@@ -239,7 +243,8 @@ function resetOpsRangeCompare() {
 function updateOpsRangeOverlay(startIdx, endIdx) {
   if (!costChart || !ensureOpsRangeSelectionUi()) return;
   var xScale = costChart.scales && costChart.scales.x;
-  if (!xScale || !opsRangeShade || !opsRangeStartLine || !opsRangeEndLine) return;
+  var area = costChart.chartArea;
+  if (!xScale || !area || !opsRangeShade || !opsRangeStartLine || !opsRangeEndLine) return;
   var startX = Number(xScale.getPixelForValue(startIdx));
   var endX = Number(xScale.getPixelForValue(endIdx));
   if (!isFinite(startX) || !isFinite(endX)) {
@@ -248,12 +253,23 @@ function updateOpsRangeOverlay(startIdx, endIdx) {
   }
   var left = Math.min(startX, endX);
   var right = Math.max(startX, endX);
+  var top = Number(area.top);
+  var height = Math.max(Number(area.bottom) - top, 0);
   opsRangeShade.style.display = 'block';
+  opsRangeShade.style.top = top + 'px';
+  opsRangeShade.style.bottom = 'auto';
+  opsRangeShade.style.height = height + 'px';
   opsRangeShade.style.left = left + 'px';
   opsRangeShade.style.width = Math.max(right - left, 1) + 'px';
   opsRangeStartLine.style.display = 'block';
+  opsRangeStartLine.style.top = top + 'px';
+  opsRangeStartLine.style.bottom = 'auto';
+  opsRangeStartLine.style.height = height + 'px';
   opsRangeStartLine.style.left = startX + 'px';
   opsRangeEndLine.style.display = 'block';
+  opsRangeEndLine.style.top = top + 'px';
+  opsRangeEndLine.style.bottom = 'auto';
+  opsRangeEndLine.style.height = height + 'px';
   opsRangeEndLine.style.left = endX + 'px';
 }
 
@@ -281,6 +297,16 @@ function renderRangeCompareSummary(startIdx, endIdx) {
   opsRangeDelta.className = 'range-compare-delta ' + compare.cls;
   opsRangeDelta.textContent = compare.text + pctText;
   opsRangeSummary.classList.add('visible');
+}
+
+function setOpsRangeTooltipEnabled(chart: any, enabled: boolean) {
+  if (!chart || !chart.options) return;
+  var options = chart.options as any;
+  if (!options.plugins) options.plugins = {};
+  if (!options.plugins.tooltip) options.plugins.tooltip = {};
+  if (options.plugins.tooltip.enabled === enabled) return;
+  options.plugins.tooltip.enabled = enabled;
+  chart.update('none');
 }
 
 function bindOpsRangeSelection(chart: any) {
@@ -319,6 +345,7 @@ function bindOpsRangeSelection(chart: any) {
     opsRangeDragStartX = event.offsetX;
     opsRangeStartIdx = clampTrendIndex(xScale.getValueForPixel(event.offsetX), labels.length);
     opsRangeEndIdx = opsRangeStartIdx;
+    setOpsRangeTooltipEnabled(costChart, false);
     updateOpsRangeOverlay(opsRangeStartIdx, opsRangeEndIdx);
   };
 
@@ -333,6 +360,7 @@ function bindOpsRangeSelection(chart: any) {
 
   var onMouseUp = function(event: MouseEvent) {
     if (!opsRangeDragging || !costChart) return;
+    setOpsRangeTooltipEnabled(costChart, true);
     var labels = getLabels();
     var xScale = costChart.scales && costChart.scales.x;
     if (!labels.length || !xScale) {
@@ -346,7 +374,6 @@ function bindOpsRangeSelection(chart: any) {
     endX = clampCanvasOffsetX(canvas, endX);
     var distance = Math.abs(endX - opsRangeDragStartX);
     opsRangeEndIdx = clampTrendIndex(xScale.getValueForPixel(endX), labels.length);
-    opsRangeDragging = false;
 
     if (distance < 8) {
       clearOpsRangeSelection();
@@ -358,6 +385,7 @@ function bindOpsRangeSelection(chart: any) {
     var endIdx = Math.max(opsRangeStartIdx, opsRangeEndIdx);
     updateOpsRangeOverlay(startIdx, endIdx);
     renderRangeCompareSummary(startIdx, endIdx);
+    clearOpsRangeSelection();
   };
 
   canvas.addEventListener('mousedown', onMouseDown);
