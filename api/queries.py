@@ -68,6 +68,10 @@ except ImportError:  # pragma: no cover
 CN_TZ = timezone(timedelta(hours=8))
 _snapshot_cache = TTLCache(maxsize=200, ttl=90)
 _cache_lock = asyncio.Lock()
+_tx_cache = TTLCache(maxsize=500, ttl=60)
+_tx_cache_lock = asyncio.Lock()
+_oplog_cache = TTLCache(maxsize=500, ttl=60)
+_oplog_cache_lock = asyncio.Lock()
 _CACHE_MISS = object()
 
 # CANONICAL SUCCESS FILTER: execution_result = 'SUCCEED' — change only here
@@ -1903,7 +1907,7 @@ def _build_audit_log_where_clause(
     return f"WHERE {' AND '.join(clauses)}", params
 
 
-async def get_transactions(
+async def _actual_get_transactions(
     pool: Pool,
     page: int,
     page_size: int,
@@ -2033,6 +2037,60 @@ async def get_transactions(
         items.append(item)
 
     return {"items": items, "total": count_row["total"]}
+
+
+async def get_transactions(
+    pool,
+    page,
+    page_size,
+    tenant_id,
+    member_id=None,
+    tx_type=None,
+    start_date=None,
+    end_date=None,
+    keyword=None,
+    **filters,
+):
+    filters = {
+        "member_id": filters.get("member_id", member_id),
+        "tx_type": filters.get("tx_type", tx_type),
+        "start_date": filters.get("start_date", start_date),
+        "end_date": filters.get("end_date", end_date),
+        "keyword": filters.get("keyword", keyword),
+    }
+
+    cache_key = (
+        tenant_id,
+        page,
+        page_size,
+        filters.get("member_id"),
+        filters.get("tx_type"),
+        filters.get("start_date"),
+        filters.get("end_date"),
+        filters.get("keyword"),
+    )
+    cached_transactions = _tx_cache.get(cache_key, _CACHE_MISS)
+    if cached_transactions is not _CACHE_MISS:
+        return cached_transactions
+
+    async with _tx_cache_lock:
+        cached_transactions = _tx_cache.get(cache_key, _CACHE_MISS)
+        if cached_transactions is not _CACHE_MISS:
+            return cached_transactions
+
+        transactions = await _actual_get_transactions(
+            pool,
+            page,
+            page_size,
+            tenant_id,
+            filters.get("member_id"),
+            filters.get("tx_type"),
+            filters.get("start_date"),
+            filters.get("end_date"),
+            filters.get("keyword"),
+        )
+        _tx_cache[cache_key] = transactions
+        return transactions
 
 
 async def get_skills(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
@@ -2452,7 +2510,7 @@ async def get_task_week_summary(pool: Pool, task_id: int, tenant_id: int) -> dic
     }
 
 
-async def get_audit_log(
+async def _actual_get_audit_log(
     pool: Pool,
     tenant_id: int,
     page: int = 1,
@@ -2491,6 +2549,51 @@ async def get_audit_log(
             item["created_at"] = item["created_at"].isoformat()
         items.append(item)
     return {"items": items, "total": total}
+
+
+async def get_audit_log(
+    pool,
+    tenant_id,
+    page=1,
+    page_size=20,
+    member_id=None,
+    action=None,
+    start_date=None,
+    end_date=None,
+    keyword=None,
+):
+    cache_key = (
+        tenant_id,
+        page,
+        page_size,
+        member_id,
+        action,
+        start_date,
+        end_date,
+        keyword,
+    )
+    cached_audit_log = _oplog_cache.get(cache_key, _CACHE_MISS)
+    if cached_audit_log is not _CACHE_MISS:
+        return cached_audit_log
+
+    async with _oplog_cache_lock:
+        cached_audit_log = _oplog_cache.get(cache_key, _CACHE_MISS)
+        if cached_audit_log is not _CACHE_MISS:
+            return cached_audit_log
+
+        audit_log = await _actual_get_audit_log(
+            pool,
+            tenant_id,
+            page,
+            page_size,
+            member_id,
+            action,
+            start_date,
+            end_date,
+            keyword,
+        )
+        _oplog_cache[cache_key] = audit_log
+        return audit_log
 
 
 async def distribute_credits(pool: Pool, operator_id: int, target_user_id: int, amount: int, remark: str, api_tenant_id: int) -> None:
@@ -2587,6 +2690,8 @@ async def distribute_credits(pool: Pool, operator_id: int, target_user_id: int, 
                 tenant_id, amount, remark,
             )
     _snapshot_cache.clear()
+    _tx_cache.clear()
+    _oplog_cache.clear()
 
 
 async def update_member(pool: Pool, user_id: int, tenant_id: int, name: str | None, phone_number: str | None, role: str | None) -> None:
@@ -2627,6 +2732,8 @@ async def update_member(pool: Pool, user_id: int, tenant_id: int, name: str | No
                 json.dumps(dict(after), default=str),
             )
     _snapshot_cache.clear()
+    _tx_cache.clear()
+    _oplog_cache.clear()
 
 
 async def delete_member(pool: Pool, user_id: int, tenant_id: int) -> None:
@@ -2653,6 +2760,8 @@ async def delete_member(pool: Pool, user_id: int, tenant_id: int) -> None:
                 user_id, user["name"], tenant_id, user_id, user["name"],
             )
     _snapshot_cache.clear()
+    _tx_cache.clear()
+    _oplog_cache.clear()
 
 
 async def add_member(pool: Pool, name: str, phone_number: str, role: str | None, initial_balance: int, tenant_id: int) -> int:
@@ -2692,4 +2801,6 @@ async def add_member(pool: Pool, name: str, phone_number: str, role: str | None,
                 new_id, name, tenant_id, new_id, name, initial_balance,
             )
     _snapshot_cache.clear()
+    _tx_cache.clear()
+    _oplog_cache.clear()
     return new_id
