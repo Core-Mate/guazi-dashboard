@@ -57,6 +57,7 @@ let _popoutChart = null;
 let _highlightFloatingPopout: HTMLElement | null = null;
 let _activeHighlightPopoutIdx = -1;
 let _highlightPopoutViewportBound = false;
+let _highlightPopoutCleanup: (() => void) | null = null;
 let lastOpsData: any = null;
 let rawSeries: Record<string, number[]> = {};
 
@@ -258,6 +259,7 @@ function buildTrendAxisTitle(text) {
 function syncOpsTrendYAxisMax(chart: any) {
   var yAxis = chart && chart.options && chart.options.scales ? chart.options.scales.y : null;
   if (!yAxis) return;
+  yAxis.min = 0;
   var allValues = (chart.data.datasets || [])
     .flatMap(function(ds: any) { return ds && Array.isArray(ds.data) ? ds.data : []; })
     .filter(function(v: any) { return typeof v === 'number' && isFinite(v); });
@@ -369,7 +371,7 @@ export function applyTrendDisplayMode(range?: string) {
 
   var yAxis = costChart.options && costChart.options.scales ? costChart.options.scales.y : null;
   if (yAxis) {
-    delete yAxis.min;
+    yAxis.min = 0;
     delete yAxis.max;
     if (activeCount === 0) {
       yAxis.title = buildTrendAxisTitle('请选择指标');
@@ -580,7 +582,7 @@ function buildPopoutChart(canvas, card: HighlightCard, color) {
       },
       scales: {
         x: { grid: { display: false }, ticks: { font: { size: 10 }, color: '#a1a1aa', maxTicksLimit: 7, autoSkip: true, maxRotation: 0 } },
-        y: { grid: { color: 'rgba(15,23,42,0.04)' }, ticks: { font: { size: 10 }, color: '#a1a1aa' }, beginAtZero: false, grace: '8%' }
+        y: { grid: { color: 'rgba(15,23,42,0.04)' }, ticks: { font: { size: 10 }, color: '#a1a1aa' }, min: 0, beginAtZero: true, grace: '8%' }
       },
       interaction: { mode: 'index', intersect: false },
       animation: { duration: 250 },
@@ -616,11 +618,25 @@ function hideHighlightPopout() {
 function positionFloatingPopout(popout: HTMLElement, card: HTMLElement) {
   const r = card.getBoundingClientRect();
   const W = popout.offsetWidth || 320;
+  const H = popout.offsetHeight || 220;
   const bounds = getContentClampBounds();
   let left = r.left + r.width / 2 - W / 2;
-  left = Math.max(bounds.left, Math.min(left, bounds.right - W));
+  const maxLeft = Math.max(bounds.left, bounds.right - W);
+  left = Math.max(bounds.left, Math.min(left, maxLeft));
+  let top = r.bottom + 8;
+  if (top + H > bounds.bottom) top = r.top - H - 8;
+  const maxTop = Math.max(bounds.top, bounds.bottom - H);
+  top = Math.max(bounds.top, Math.min(top, maxTop));
   popout.style.left = left + 'px';
-  popout.style.top = (r.bottom + 8) + 'px';
+  popout.style.top = top + 'px';
+}
+
+function ensureHighlightFloatingPopout(tmpl?: HTMLElement | null) {
+  if (_highlightFloatingPopout || !tmpl) return _highlightFloatingPopout;
+  _highlightFloatingPopout = tmpl.cloneNode(true) as HTMLElement;
+  _highlightFloatingPopout.className = 'highlight-popout-floating';
+  document.body.appendChild(_highlightFloatingPopout);
+  return _highlightFloatingPopout;
 }
 
 export function renderHighlightCards(cards: HighlightCard[], range?, customLen?) {
@@ -716,42 +732,84 @@ function bindPopoutEvents(cards: HighlightCard[]) {
       if (e.key === 'Escape' && _activeHighlightPopoutIdx !== -1) hideHighlightPopout();
     });
   }
+  var firstTemplate = grid.querySelector('.highlight-popout') as HTMLElement | null;
+  ensureHighlightFloatingPopout(firstTemplate);
+  if (_highlightPopoutCleanup) {
+    _highlightPopoutCleanup();
+    _highlightPopoutCleanup = null;
+  }
 
   const show = function(card: HTMLElement, idx: number) {
     const tmpl = card.querySelector('.highlight-popout') as HTMLElement | null;
     if (!tmpl) return;
-
-    if (!_highlightFloatingPopout) {
-      _highlightFloatingPopout = tmpl.cloneNode(true) as HTMLElement;
-      _highlightFloatingPopout.className = 'highlight-popout-floating';
-      document.body.appendChild(_highlightFloatingPopout);
-    } else if (_activeHighlightPopoutIdx !== idx) {
+    var floating = ensureHighlightFloatingPopout(tmpl);
+    if (!floating) return;
+    if (_activeHighlightPopoutIdx !== idx) {
       destroyPopoutChart();
-      _highlightFloatingPopout.innerHTML = tmpl.innerHTML;
+      floating.innerHTML = tmpl.innerHTML;
     }
 
     _activeHighlightPopoutIdx = idx;
 
-    const canvas = _highlightFloatingPopout.querySelector('canvas') as HTMLCanvasElement | null;
+    const canvas = floating.querySelector('canvas') as HTMLCanvasElement | null;
     const item = cards[idx];
     if (canvas && item) {
       canvas.id = 'popout-canvas-floating-' + idx;
       createPopoutChart(canvas, item, SPARK_COLORS[idx] || '#6366f1');
     }
 
-    positionFloatingPopout(_highlightFloatingPopout, card);
-    _highlightFloatingPopout.classList.add('visible');
+    positionFloatingPopout(floating, card);
+    floating.classList.add('visible');
   };
 
   grid.querySelectorAll('.highlight-card').forEach(function(card, idx) {
     var el = card as HTMLElement;
     var statsGrid = el.querySelector('.highlight-card-stats-grid') as HTMLElement | null;
     if (statsGrid) statsGrid.hidden = true;
-    el.onmouseenter = null;
-    el.onmouseleave = null;
-    el.onmouseenter = function() { show(el, idx); };
-    el.onmouseleave = hideHighlightPopout;
+    el.dataset.popoutIdx = String(idx);
   });
+  var onMouseOver = function(e: MouseEvent) {
+    var target = e.target as HTMLElement | null;
+    if (!target) return;
+    var card = target.closest('.highlight-card') as HTMLElement | null;
+    if (!card || !grid.contains(card)) return;
+    var from = e.relatedTarget as Node | null;
+    if (from && card.contains(from)) return;
+    var idx = Number(card.dataset.popoutIdx);
+    if (!Number.isInteger(idx) || !cards[idx]) return;
+    show(card, idx);
+  };
+  var onMouseOut = function(e: MouseEvent) {
+    var target = e.target as HTMLElement | null;
+    if (!target) return;
+    var card = target.closest('.highlight-card') as HTMLElement | null;
+    if (!card || !grid.contains(card)) return;
+    var to = e.relatedTarget as Node | null;
+    if (to && card.contains(to)) return;
+    if (to && _highlightFloatingPopout && _highlightFloatingPopout.contains(to)) return;
+    if (to && grid.contains(to)) {
+      var nextCard = (to as HTMLElement).closest('.highlight-card') as HTMLElement | null;
+      if (nextCard && nextCard !== card) return;
+    }
+    hideHighlightPopout();
+  };
+  var onPopoutMouseLeave = function(e: MouseEvent) {
+    var to = e.relatedTarget as Node | null;
+    if (to && grid.contains(to)) return;
+    hideHighlightPopout();
+  };
+  grid.addEventListener('mouseover', onMouseOver);
+  grid.addEventListener('mouseout', onMouseOut);
+  if (_highlightFloatingPopout) {
+    _highlightFloatingPopout.addEventListener('mouseleave', onPopoutMouseLeave);
+  }
+  _highlightPopoutCleanup = function() {
+    grid.removeEventListener('mouseover', onMouseOver);
+    grid.removeEventListener('mouseout', onMouseOut);
+    if (_highlightFloatingPopout) {
+      _highlightFloatingPopout.removeEventListener('mouseleave', onPopoutMouseLeave);
+    }
+  };
 }
 
 

@@ -10,7 +10,7 @@ export var chartColors = {
 };
 export var ttOpts = { backgroundColor: '#fff', titleColor: '#09090b', bodyColor: '#52525b', borderColor: '#e4e4e7', borderWidth: 1, padding: 12, cornerRadius: 8, titleFont: { weight: 600 }, displayColors: true, boxPadding: 4 };
 export var lineBase = { tension: 0.3, pointRadius: 0, pointHoverRadius: 6, borderWidth: 2.5 };
-export var axBase: any = { x: { grid: { display: false }, ticks: { font: { size: 11 }, color: '#a1a1aa', maxTicksLimit: 10, autoSkip: true, maxRotation: 0 } }, y: { grid: { color: '#f4f4f5' }, ticks: { font: { size: 11 }, color: '#a1a1aa' }, beginAtZero: true } };
+export var axBase: any = { x: { grid: { display: false }, ticks: { font: { size: 11 }, color: '#a1a1aa', maxTicksLimit: 10, autoSkip: true, maxRotation: 0 } }, y: { grid: { color: '#f4f4f5' }, ticks: { font: { size: 11 }, color: '#a1a1aa' }, min: 0, beginAtZero: true } };
 export var chartBase = { responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false }, animation: { duration: 600, easing: 'easeOutQuart' } };
 
 export var platformMap: Record<string, string> = {

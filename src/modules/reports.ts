@@ -140,7 +140,8 @@ function svgLine(labels: string[], data: number[], color: string, width: number,
   var plotW = width - padL - padR;
   var plotH = height - padT - padB;
   var max = Math.max.apply(null, data);
-  var min = Math.min.apply(null, data);
+  var min = 0;
+  if (max === min) max = min + 1;
   var range = max - min || 1;
   function xPos(i: number) { return padL + (i / (data.length - 1)) * plotW; }
   function yPos(v: number) { return padT + plotH - ((v - min) / range) * plotH; }
@@ -450,10 +451,9 @@ async function buildReportHTML(dim) {
     var plotW = width - padL - padR;
     var plotH = height - padT - padB;
     var max = Math.max.apply(null, chartValues);
-    var min = Math.min.apply(null, chartValues);
+    var min = 0;
     if (max === min) {
       max += 1;
-      min = Math.max(0, min - 1);
     }
     var grid = '';
     for (var i = 0; i <= 4; i++) {
@@ -507,8 +507,8 @@ async function buildReportHTML(dim) {
     var w = 220, h = 48, pad = 4;
     var plotW = w - pad * 2, plotH = h - pad * 2;
     var max = Math.max.apply(null, arr);
-    var min = Math.min.apply(null, arr);
-    if (max === min) { max += 1; min = Math.max(0, min - 1); }
+    var min = 0;
+    if (max === min) { max += 1; }
     var coords = arr.map(function(v, i) {
       var x = pad + (plotW * i / Math.max(1, arr.length - 1));
       var y = pad + plotH - ((v - min) / (max - min)) * plotH;
