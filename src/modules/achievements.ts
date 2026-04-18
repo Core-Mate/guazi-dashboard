@@ -93,6 +93,12 @@ function bindAchievementPopout(container: HTMLElement): void {
     active.classList.add('visible')
   }
   const hide = () => { if (active) active.classList.remove('visible') }
+  if (!document.dataset.achieveEscBound) {
+    document.dataset.achieveEscBound = '1'
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && active && active.classList.contains('visible')) hide()
+    })
+  }
   container.addEventListener('mouseover', (e: Event) => {
     const tag = (e.target as HTMLElement).closest('.achievement-tag') as HTMLElement | null
     if (tag && container.contains(tag)) show(tag)
