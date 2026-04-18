@@ -2030,7 +2030,6 @@ async def get_account_week_summary(pool: Pool, account_id: int, tenant_id: int) 
             "id": str(account_row["id"]),
             "name": account_row["name"] or f"user-{account_row['id']}",
             "role": account_row["role"] or "",
-            "dept": "",
             "platforms": list(account_row["platforms"] or []),
         },
         "summary": {

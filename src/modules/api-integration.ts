@@ -2,7 +2,6 @@ import {
   fetchTrend as apiFetchTrend,
   fetchWallet as apiFetchWallet,
   fetchAccounts as apiFetchAccounts,
-  fetchSkills as apiFetchSkills,
 } from '../data/api'
 import { renderHighlightCards } from './charts'
 import { renderMembers } from './members'
@@ -10,7 +9,6 @@ import { renderTransactions } from './records'
 import { renderAccountAcquireGroup } from './accounts'
 import { renderScenarioCards, renderScenarioCardsFull } from './scenarios'
 import { membersData } from '../data/members'
-import { replaceSkillData } from '../data/scenarios'
 import { accountList } from '../data/accounts'
 import { fmtHM } from '../data/helpers'
 import { rebuildCustomDropdown } from './dropdown'
@@ -460,7 +458,6 @@ export interface AccountWeekSummary {
     id: string;
     name: string;
     role: string;
-    dept: string;
     platforms: string[];
   };
   summary: {
@@ -677,33 +674,6 @@ export async function tryLiveAccounts() {
     });
   });
   renderAccountAcquireGroup();
-}
-
-export async function tryLiveSkills() {
-  var data = await apiFetchSkills();
-  if (!data || !data.length) return;
-
-  var newSkillData = data.map(function(s) {
-    var durSec = s.total_duration_sec || 0;
-    var durStr = fmtHM(durSec);
-    return {
-      skill: 'S' + s.id,
-      skillName: s.skill_name,
-      description: s.description || '',
-      exec: s.total_executions,
-      success: s.success_count,
-      fail: s.total_executions - s.success_count,
-      avgDur: durStr,
-      durationSec: durSec,
-      tokenAvg: Math.round(s.total_credits || 0),
-      comments: 0, likes: 0, favorites: 0, dms: 0,
-      profileViews: 0, uniqueReach: 0,
-    };
-  });
-
-  replaceSkillData('acquire', newSkillData);
-  renderScenarioCards();
-  renderScenarioCardsFull();
 }
 
 export function populateMemberFilter() {

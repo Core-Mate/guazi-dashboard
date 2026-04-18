@@ -1,1 +1,1 @@
-export { scenarioGroups, skillData, enabledScenarios, replaceSkillData } from './generator';
+export { scenarioGroups, skillData, enabledScenarios } from './generator';

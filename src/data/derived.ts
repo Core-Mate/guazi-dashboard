@@ -4,7 +4,6 @@ export var execSteps: Record<number, any[]> = {};
 export var accountList: any[] = [];
 export var scenarioGroups: any[] = [];
 export var skillData: any = {};
-export function replaceSkillData(_g: string, _items: any) {}
 export var deviceList: any[] = [];
 export var deviceMetrics: Record<string, any> = {};
 export var deviceHeat: any[] = [];
@@ -28,13 +27,6 @@ export var ACHIEVEMENT_CONTEXTS: any = {
   '7d': { metrics: emptyAchievementMetrics.slice() },
   '30d': { metrics: emptyAchievementMetrics.slice() },
   custom: { metrics: emptyAchievementMetrics.slice() },
-};
-
-export var mockData: any = {
-  today: {},
-  '7d': {},
-  '30d': {},
-  custom: {},
 };
 
 export var membersData: any[] = [];

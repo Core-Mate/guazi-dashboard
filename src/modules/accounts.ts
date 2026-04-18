@@ -145,14 +145,13 @@ function applyAccountHoverIdentity(card: HTMLElement, summary?: AccountWeekSumma
   var account = summary && summary.account ? summary.account : null
   var name = account && account.name ? account.name : String(fallback && fallback.name || fallback && fallback.username || '账号详情')
   var roleText = account ? formatAccountRole(account.role) : formatAccountRole(fallback && fallback.role)
-  var deptText = account && account.dept ? account.dept : '未设置部门'
   var platformText = account ? formatAccountPlatforms(account.platforms) : '加载中'
   var avatar = card.querySelector('.account-hover-avatar') as HTMLElement | null
   var nameEl = card.querySelector('.account-hover-name') as HTMLElement | null
   var metaEl = card.querySelector('.account-hover-meta') as HTMLElement | null
   if (avatar) avatar.textContent = name ? name.charAt(0) : '—'
   if (nameEl) nameEl.textContent = name
-  if (metaEl) metaEl.textContent = [roleText, deptText, platformText].filter(Boolean).join(' · ')
+  if (metaEl) metaEl.textContent = [roleText, platformText].filter(Boolean).join(' · ')
 }
 
 function renderAccountHoverLoading(row: HTMLElement, accountId: string) {

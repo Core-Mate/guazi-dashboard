@@ -112,11 +112,6 @@ function bindAchievementPopout(container: HTMLElement): void {
   window.addEventListener('resize', hide)
 }
 
-export function computeAchievements(ctx) {
-  void ctx
-  return []
-}
-
 function renderAchievementItems(items: any[]) {
   var container = document.getElementById('achievementBar') as HTMLElement | null
   var wrap = container ? ensureAchievementScrollWrap(container) : null

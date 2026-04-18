@@ -244,16 +244,6 @@
     <div class="stat-card"><div class="stat-header"><span class="stat-title">成员数</span></div><div class="stat-value" id="statMemberCount">0</div></div>
   </div>
   <div class="card">
-    <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;">
-      <div class="tabs" style="border:none;padding:0;margin:0;">
-        <button class="tab-btn active" onclick="switchEntCard('members',this)">成员管理</button>
-        <button class="tab-btn" onclick="switchEntCard('oplog',this)">最近操作日志</button>
-      </div>
-      <div style="display:flex;align-items:center;gap:8px;">
-        <input class="toolbar-search" id="entMemberSearch" type="text" placeholder="搜索成员..." style="width:180px;">
-        <button class="btn-action primary" onclick="openAddMemberModal()">+ 添加成员</button>
-      </div>
-    </div>
     <div class="card-body" style="padding:0;">
       <div id="entCard-members">
         <div id="memberBatchBar" class="batch-bar" style="display:none;">
@@ -262,15 +252,13 @@
           <button class="modal-btn" style="background:#ef4444;color:#fff;margin-left:8px;padding:6px 16px;font-size:13px;" onclick="confirmBatchRemove()">批量移除</button>
           <button class="modal-btn" onclick="cancelBatchSelect()" style="margin-left:8px;padding:6px 12px;font-size:13px;">取消选择</button>
         </div>
+        <div class="member-table-toolbar">
+          <input class="toolbar-search" id="entMemberSearch" type="search" placeholder="搜索成员...">
+          <button class="btn-action primary" onclick="openAddMemberModal()">+ 添加成员</button>
+        </div>
         <div class="table-wrap" style="border:none;border-radius:0;"><table>
           <thead><tr><th style="width:36px;"><input type="checkbox" id="memberSelectAll" class="member-checkbox" onchange="toggleSelectAllMembers(this.checked)"></th><th class="th-sortable th-sortable-manual" data-sort-group="members" data-sort-key="name" onclick="sortMembers('name')">姓名<span class="sort-arrow">▼</span></th><th class="th-sortable th-sortable-manual" data-sort-group="members" data-sort-key="phone" onclick="sortMembers('phone')">手机号<span class="sort-arrow">▼</span></th><th class="th-sortable th-sortable-manual" data-sort-group="members" data-sort-key="role" onclick="sortMembers('role')">角色<span class="sort-arrow">▼</span></th><th class="th-sortable th-sortable-manual" data-sort-group="members" data-sort-key="balance" onclick="sortMembers('balance')">算力豆余额<span class="sort-arrow">▼</span></th><th class="th-sortable th-sortable-manual th-sort-desc" data-sort-group="members" data-sort-key="joinedAt" onclick="sortMembers('joinedAt')">加入时间<span class="sort-arrow">▼</span></th><th>操作</th></tr></thead>
           <tbody id="membersBody"></tbody>
-        </table></div>
-      </div>
-      <div id="entCard-oplog" style="display:none;">
-        <div class="table-wrap" style="border:none;border-radius:0;"><table>
-          <thead><tr><th class="th-sortable th-sortable-manual th-sort-desc" data-sort-group="oplog" data-sort-key="time" onclick="sortOplog('time')">时间<span class="sort-arrow">▼</span></th><th class="th-sortable th-sortable-manual" data-sort-group="oplog" data-sort-key="operator" onclick="sortOplog('operator')">操作人<span class="sort-arrow">▼</span></th><th class="th-sortable th-sortable-manual" data-sort-group="oplog" data-sort-key="action" onclick="sortOplog('action')">操作类型<span class="sort-arrow">▼</span></th><th>详情</th></tr></thead>
-          <tbody id="overviewOplogTbody"></tbody>
         </table></div>
       </div>
     </div>

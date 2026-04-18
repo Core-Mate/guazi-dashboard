@@ -1,1 +1,1 @@
-export { mockData, INTERACTION_BREAKDOWN, ttOpts, lineBase, axBase, chartBase } from './generator';
+export { INTERACTION_BREAKDOWN, ttOpts, lineBase, axBase, chartBase } from './generator';

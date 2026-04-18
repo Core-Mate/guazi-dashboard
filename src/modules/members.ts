@@ -2,7 +2,6 @@ import { membersData } from '../data/members'
 import { openModal, closeModal, showToast } from './modal-toast'
 import { addTransactionRecord, addOplogRecord } from '../data/records'
 import { apiAddMember, apiUpdateMember, apiDeleteMember, apiDistributeCredits, fetchWallet } from '../data/api'
-import { renderOverviewOplog } from './wallet'
 import { fetchMembers as fetchMembersApi, populateMemberFilter } from './api-integration'
 
 function startLoading(label?: string) {
@@ -193,7 +192,6 @@ export async function addMember() {
   await Promise.all([refreshFromApi(), refreshWalletStats()]);
   showToast('成功添加成员 ' + name, 'success');
   addOplogRecord(operator, '新增成员', '添加成员 ' + name, '已加入团队');
-  renderOverviewOplog();
 }
 
 export function openManageMemberModal(id) {
@@ -249,7 +247,6 @@ export async function saveManageMember(id) {
     addOplogRecord(operator, '分发算力豆', adjust > 0 ? '分发 ' + adjust.toLocaleString() + ' 算力豆给 ' + name : '回收 ' + Math.abs(adjust).toLocaleString() + ' 算力豆自 ' + name);
   }
   addOplogRecord(operator, '编辑成员', '编辑成员 ' + name, '已更新');
-  renderOverviewOplog();
   showToast('成员信息已更新', 'success');
 }
 
@@ -276,7 +273,6 @@ export async function removeMember(id) {
   closeModal();
   await Promise.all([refreshFromApi(), refreshWalletStats()]);
   addOplogRecord(operator, '删除成员', '移除成员 ' + memberName, '已移除');
-  renderOverviewOplog();
   showToast('成员已移除', 'success');
 }
 
@@ -382,7 +378,6 @@ export async function executeBatchRemove() {
   targetNames.forEach(function(name) {
     addOplogRecord(operator, '删除成员', '移除成员 ' + name, '已移除');
   });
-  renderOverviewOplog();
   cancelBatchSelect();
   showToast('已成功移除 ' + targetIds.length + ' 位成员', 'success');
 }
@@ -420,7 +415,6 @@ export async function confirmBatchDistribute() {
     addTransactionRecord(admin.name, '分发', '分发给 ' + targetName + ' ' + amount.toLocaleString() + ' 算力豆', -amount);
     addOplogRecord(admin.name, '分发算力豆', '分发 ' + amount.toLocaleString() + ' 算力豆给 ' + targetName);
   });
-  renderOverviewOplog();
   closeModal();
   await Promise.all([refreshFromApi(), refreshWalletStats()]);
   cancelBatchSelect();
