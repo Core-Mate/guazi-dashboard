@@ -143,18 +143,23 @@ def _resolve_window(
             raise ValueError("custom range requires start and end")
         cur_start = datetime.fromisoformat(start)
         cur_end = datetime.fromisoformat(end)
+        start_is_date_only = "T" not in start and ":" not in start
         end_is_date_only = "T" not in end and ":" not in end
         if cur_start.tzinfo is None:
             cur_start = cur_start.replace(tzinfo=CN_TZ)
         if cur_end.tzinfo is None:
             cur_end = cur_end.replace(tzinfo=CN_TZ)
+        start_date = cur_start.date()
+        end_date = cur_end.date()
         if end_is_date_only:
             cur_end = cur_end + timedelta(days=1)
         length = cur_end - cur_start
         prev_end = cur_start
         prev_start = cur_start - length
-        days = max(1, length.days or 1)
-        return (cur_start, cur_end, prev_start, prev_end, "较前期", "day", days)
+        days_diff = (end_date - start_date).days
+        if start_is_date_only and end_is_date_only and days_diff == 0:
+            return (cur_start, cur_end, prev_start, prev_end, "较前期", "hour", 24)
+        return (cur_start, cur_end, prev_start, prev_end, "较前期", "day", days_diff + 1)
 
     raise ValueError(f"unknown range: {range_param}")
 
@@ -599,13 +604,10 @@ async def aggregate_aggregations(
             account_credit_agg AS (
                 SELECT
                     te.user_id,
-                    COALESCE(SUM(ABS(cf.change_amount)) FILTER (WHERE cf.change_type = 'CONSUME'), 0)::bigint AS credits
+                    COALESCE(SUM(ur.credits_used), 0)::bigint AS credits
                 FROM task_execution te
                 JOIN users u ON u.id = te.user_id
                 LEFT JOIN usage_record ur ON ur.task_id = te.id::varchar
-                LEFT JOIN credit_flow cf ON cf.ref_type = 'usage'
-                                         AND cf.ref_id ~ '^[0-9]+$'
-                                         AND CASE WHEN cf.ref_id ~ '^[0-9]+$' THEN cf.ref_id::int END = ur.id
                 WHERE u.tenant_id = $1
                   AND COALESCE(te.finished_at, te.started_at) >= $2
                   AND COALESCE(te.finished_at, te.started_at) < $3
@@ -664,13 +666,10 @@ async def aggregate_aggregations(
             skill_credit_agg AS (
                 SELECT
                     te.task_id AS skill_id,
-                    COALESCE(SUM(ABS(cf.change_amount)) FILTER (WHERE cf.change_type = 'CONSUME'), 0)::bigint AS total_credits
+                    COALESCE(SUM(ur.credits_used), 0)::bigint AS total_credits
                 FROM task_execution te
                 JOIN users u ON u.id = te.user_id
                 LEFT JOIN usage_record ur ON ur.task_id = te.id::varchar
-                LEFT JOIN credit_flow cf ON cf.ref_type = 'usage'
-                                         AND cf.ref_id ~ '^[0-9]+$'
-                                         AND CASE WHEN cf.ref_id ~ '^[0-9]+$' THEN cf.ref_id::int END = ur.id
                 WHERE u.tenant_id = $1
                   AND te.task_id IS NOT NULL
                   AND COALESCE(te.finished_at, te.started_at) >= $2
@@ -745,13 +744,10 @@ async def aggregate_aggregations(
             device_credit_agg AS (
                 SELECT
                     te.device_id,
-                    COALESCE(SUM(ABS(cf.change_amount)) FILTER (WHERE cf.change_type = 'CONSUME'), 0)::bigint AS total_credits
+                    COALESCE(SUM(ur.credits_used), 0)::bigint AS total_credits
                 FROM task_execution te
                 JOIN users u ON u.id = te.user_id
                 LEFT JOIN usage_record ur ON ur.task_id = te.id::varchar
-                LEFT JOIN credit_flow cf ON cf.ref_type = 'usage'
-                                         AND cf.ref_id ~ '^[0-9]+$'
-                                         AND CASE WHEN cf.ref_id ~ '^[0-9]+$' THEN cf.ref_id::int END = ur.id
                 WHERE u.tenant_id = $1
                   AND te.device_id IS NOT NULL
                   AND COALESCE(te.finished_at, te.started_at) >= $2
