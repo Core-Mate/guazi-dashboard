@@ -97,6 +97,24 @@ function renderOverviewOplogBody(body, rows) {
   }).join('')
 }
 
+function injectTableSkeletonRows(body, rowCount) {
+  body.innerHTML = ''
+  var table = body.closest('table') as HTMLTableElement | null
+  var headRow = table ? table.querySelector('thead tr') : null
+  var colCount = headRow ? headRow.children.length : 6
+  if (!colCount) colCount = 6
+  for (var rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+    var row = document.createElement('tr')
+    row.className = 'skeleton-row'
+    for (var colIndex = 0; colIndex < colCount; colIndex += 1) {
+      var cell = document.createElement('td')
+      cell.innerHTML = '<span class="skeleton-cell"></span>'
+      row.appendChild(cell)
+    }
+    body.appendChild(row)
+  }
+}
+
 function hasOptimisticRows(items) {
   return items.some(function(item) { return Boolean(item && item.__optimistic) })
 }
@@ -484,6 +502,7 @@ export async function renderTransactions(page, pageSize) {
   if (typeof pageSize === 'number') state.pageSize = pageSize
   var showTimer = setTimeout(function() {
     if (!wrap) return
+    injectTableSkeletonRows(body, 20)
     overlay = document.createElement('div')
     overlay.className = 'table-loader-overlay'
     overlay.innerHTML = '<div class="loader-spinner"></div><div class="loader-text">加载中...</div>'
@@ -522,6 +541,7 @@ export async function renderOplog(page, pageSize) {
   if (typeof pageSize === 'number') state.pageSize = pageSize
   var showTimer = setTimeout(function() {
     if (!wrap) return
+    injectTableSkeletonRows(body, 20)
     overlay = document.createElement('div')
     overlay.className = 'table-loader-overlay'
     overlay.innerHTML = '<div class="loader-spinner"></div><div class="loader-text">加载中...</div>'
