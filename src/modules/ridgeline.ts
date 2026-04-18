@@ -167,7 +167,7 @@ export class Ridgeline {
     var axis = axisBottom(xScale)
       .tickValues(range(pointCount))
       .tickSizeOuter(0)
-      .tickFormat(function(value) { return String(Number(value) + 1) } as any)
+      .tickFormat(function(value) { return labels[Number(value)] || '' } as any)
 
     var axisGroup = svg.append('g')
       .attr('transform', 'translate(0,' + axisY + ')')
