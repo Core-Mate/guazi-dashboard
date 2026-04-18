@@ -637,7 +637,7 @@ async def aggregate_aggregations(
             account_credit_agg AS (
                 SELECT
                     te.user_id,
-                    COALESCE(SUM(ur.credits_used), 0)::bigint AS credits
+                    COALESCE(SUM(ur.credits_used), 0)::bigint AS total_credits
                 FROM task_execution te
                 JOIN users u ON u.id = te.user_id
                 LEFT JOIN usage_record ur
@@ -663,7 +663,7 @@ async def aggregate_aggregations(
                 COALESCE(account_te_agg.saves, 0)::bigint AS saves,
                 COALESCE(account_te_agg.dms, 0)::bigint AS dms,
                 COALESCE(account_te_agg.reach, 0)::bigint AS reach,
-                COALESCE(account_credit_agg.credits, 0)::bigint AS credits
+                COALESCE(account_credit_agg.total_credits, 0)::bigint AS total_credits
             FROM users u
             LEFT JOIN account_te_agg ON account_te_agg.user_id = u.id
             LEFT JOIN account_credit_agg ON account_credit_agg.user_id = u.id
@@ -841,7 +841,8 @@ async def aggregate_aggregations(
             "username": r["username"] or f"user-{r['user_id']}",
             "role": r["role"],
             "device_id": r["device_id"],
-            "token_used": int(r["credits"]),
+            "token_used": int(r["total_credits"]),
+            "total_credits": int(r["total_credits"]),
             "success_count": int(r["success_count"]),
             "exec_count": int(r["exec_count"]),
             "duration_sec": int(r["duration_sec"]),
@@ -858,7 +859,7 @@ async def aggregate_aggregations(
         "reach": sum(a["reach"] for a in accounts),
         "dms": sum(a["dms"] for a in accounts),
         "comments": sum(a["comments"] for a in accounts),
-        "credits": sum(a["token_used"] for a in accounts),
+        "credits": sum(a["total_credits"] for a in accounts),
     }
 
     # 按 execution_behavior_stat 行为数据动态分组
@@ -1842,16 +1843,12 @@ async def get_accounts(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
         account_credit_agg AS (
             SELECT
                 te.user_id AS account_id,
-                COALESCE(SUM(ABS(cf.change_amount)) FILTER (WHERE cf.change_type = 'CONSUME'), 0)::bigint AS total_credits
+                COALESCE(SUM(ur.credits_used), 0)::bigint AS total_credits
             FROM task_execution te
             JOIN users u ON u.id = te.user_id
             LEFT JOIN usage_record ur
                 -- schema mismatch: usage_record.task_id is varchar while task_execution.id is int; a future migration should align these column types.
                 ON ur.task_id = te.id::varchar
-            LEFT JOIN credit_flow cf ON cf.ref_type = 'usage'
-                                     AND cf.ref_id ~ '^[0-9]+$'
-                                     -- schema mismatch: credit_flow.ref_id is varchar while usage_record.id is int; a future migration should align these column types.
-                                     AND CASE WHEN cf.ref_id ~ '^[0-9]+$' THEN cf.ref_id::int END = ur.id
             WHERE u.tenant_id = $1
               AND NOT te.is_deleted
               AND NOT u.is_deleted
