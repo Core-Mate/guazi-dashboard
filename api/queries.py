@@ -686,7 +686,17 @@ async def aggregate_aggregations(
                     COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
                     COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
                     COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
-                    COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
+                    COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach,
+                    COALESCE(
+                        SUM(
+                            COALESCE(ebs.comment_count, 0) +
+                            COALESCE(ebs.like_count, 0) +
+                            COALESCE(ebs.collect_count, 0) +
+                            COALESCE(ebs.dm_count, 0) +
+                            COALESCE(ebs.unique_reach, 0)
+                        ),
+                        0
+                    )::bigint AS engagement_total
                 FROM task_execution te
                 LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
                 JOIN users u ON u.id = te.user_id
@@ -720,13 +730,7 @@ async def aggregate_aggregations(
                 ut.task_name AS skill_name,
                 ut.category,
                 CASE
-                    WHEN (
-                        COALESCE(skill_te_agg.comments, 0) +
-                        COALESCE(skill_te_agg.likes, 0) +
-                        COALESCE(skill_te_agg.saves, 0) +
-                        COALESCE(skill_te_agg.dms, 0) +
-                        COALESCE(skill_te_agg.reach, 0)
-                    ) > 0 THEN 'acquire'
+                    WHEN COALESCE(skill_te_agg.engagement_total, 0) > 0 THEN 'acquire'
                     ELSE 'ops'
                 END AS task_group,
                 ut.related_platforms,
