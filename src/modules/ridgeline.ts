@@ -34,13 +34,28 @@ export class Ridgeline {
   private rawSeriesList: RidgelineSeries[] = []
   private xScaleFn: any = null
   private tooltip: HTMLDivElement | null = null
+  private ro: ResizeObserver | null = null
+  private resizeTimer: number | null = null
 
   constructor(container: HTMLElement) {
     this.container = container
     this.instanceId = Math.random().toString(36).slice(2, 8)
+    this.ro = new ResizeObserver(() => {
+      if (this.resizeTimer !== null) clearTimeout(this.resizeTimer)
+      this.resizeTimer = window.setTimeout(() => {
+        this.resizeTimer = null
+        if (this.rawSeriesList.length > 0) {
+          this.setData(this.labels, this.rawSeriesList)
+        }
+      }, 120)
+    })
+    this.ro.observe(container)
   }
 
   setData(labels: string[], seriesList: RidgelineSeries[]) {
+    this.labels = labels.slice()
+    this.rawSeriesList = seriesList
+
     var seriesCount = seriesList.length
     var totalHeight = ROW_H * seriesCount * (1 - OVERLAP) + ROW_H * OVERLAP + BOTTOM_PAD + 20
     var pointCount = seriesList.reduce(function(acc, series) {
@@ -166,7 +181,6 @@ export class Ridgeline {
       this.tooltip = null
     }
     ;(this.svg.node() as any).__hoverBound = false
-    this.rawSeriesList = seriesList
     this.xScaleFn = xScale
     this.bindHover()
   }
@@ -286,6 +300,14 @@ export class Ridgeline {
   }
 
   destroy() {
+    if (this.ro) {
+      this.ro.disconnect()
+      this.ro = null
+    }
+    if (this.resizeTimer !== null) {
+      clearTimeout(this.resizeTimer)
+      this.resizeTimer = null
+    }
     if (this.tooltip) {
       this.tooltip.remove()
       this.tooltip = null
