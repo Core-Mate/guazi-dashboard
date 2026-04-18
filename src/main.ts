@@ -19,7 +19,7 @@ import { openDistributeToMember, openDistributeModal, confirmDistribute, renderO
 import { initROICard, generateReport, closeReportPreview, saveReportImage, switchReportDim, renderROIPlatformCard, renderRoiFromCharts } from './modules/reports'
 import { renderAccountMetricsTable, searchAccount, exportAccountCSV, renderAccountsFromAggs } from './modules/accounts'
 import { initCustomDropdowns } from './modules/dropdown'
-import { hideLoader } from './modules/loader'
+import { showLoader, hideLoader } from './modules/loader'
 import { bindRidgelineToggle, refreshRidgeline } from './modules/ridgeline-bind'
 import { pTag, initFilters, renderTaskTable, animateAllNumbers, getToday, getStatNum, setStatNum, prependTransaction, formatCompareText } from './modules/utils'
 import { tryLiveMembers, tryLiveWallet, tryLiveTransactions, tryLiveOpsData, populateMemberFilter, fetchDashboardData, applyBetaOverlays } from './modules/api-integration'
@@ -199,6 +199,7 @@ document.addEventListener('keydown', function(e) {
 
 // Init
 document.addEventListener('DOMContentLoaded', async function() {
+  showLoader({ immediate: true })
   var initialRange = '7d'
   // Safety net: always schedule loader hide even if init throws.
   // Actual hide happens after data render; this is the fallback.

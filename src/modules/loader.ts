@@ -1,29 +1,48 @@
 var loaderEl: HTMLElement | null = null
-var hideTimer: number | null = null
-var pendingCount = 0
+var showTimer: number | null = null
+var isShowing = false
 
 function getEl() {
   if (!loaderEl) loaderEl = document.getElementById('globalLoader')
   return loaderEl
 }
 
-export function showLoader() {
-  pendingCount++
-  if (hideTimer !== null) {
-    window.clearTimeout(hideTimer)
-    hideTimer = null
+export function showLoader(opts?: { immediate?: boolean }) {
+  if (opts && opts.immediate) {
+    isShowing = true
+    if (showTimer !== null) {
+      window.clearTimeout(showTimer)
+      showTimer = null
+    }
+    var immediateEl = getEl()
+    if (immediateEl) immediateEl.classList.remove('hidden')
+    return
   }
-  var el = getEl()
-  if (el) el.classList.remove('hidden')
+  if (isShowing) {
+    if (showTimer !== null) return
+    var currentEl = getEl()
+    if (!currentEl || !currentEl.classList.contains('hidden')) return
+  }
+  isShowing = true
+  if (showTimer !== null) {
+    window.clearTimeout(showTimer)
+  }
+  showTimer = window.setTimeout(function() {
+    showTimer = null
+    var el = getEl()
+    if (!el) return
+    el.classList.remove('hidden')
+  }, 250)
 }
 
 export function hideLoader() {
-  pendingCount = Math.max(0, pendingCount - 1)
-  if (pendingCount > 0) return
+  isShowing = false
+  if (showTimer !== null) {
+    window.clearTimeout(showTimer)
+    showTimer = null
+    return
+  }
   var el = getEl()
   if (!el) return
-  hideTimer = window.setTimeout(function() {
-    el.classList.add('hidden')
-    hideTimer = null
-  }, 120)
+  el.classList.add('hidden')
 }

@@ -1180,7 +1180,7 @@ tr.row-new {
   align-items: center;
   justify-content: center;
   gap: 18px;
-  transition: opacity 0.35s ease;
+  transition: opacity 0.15s ease;
 }
 .global-loader.hidden {
   opacity: 0;
