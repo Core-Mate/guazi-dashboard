@@ -1091,31 +1091,53 @@ async def stats_trend(pool: Pool, days: int, tenant_id: int) -> dict[str, list[A
             f"""
             WITH hours AS (
                 SELECT generate_series(
-                    DATE_TRUNC('day', NOW()),
-                    DATE_TRUNC('day', NOW()) + INTERVAL '23 hours',
+                    DATE_TRUNC('day', NOW() AT TIME ZONE 'Asia/Shanghai'),
+                    DATE_TRUNC('day', NOW() AT TIME ZONE 'Asia/Shanghai') + INTERVAL '23 hours',
                     INTERVAL '1 hour'
                 ) AS day_hour
             ),
             te_agg AS (
                 SELECT
-                    DATE_TRUNC('hour', te.started_at) AS day_hour,
+                    DATE_TRUNC('hour', COALESCE(te.finished_at, te.started_at) AT TIME ZONE 'Asia/Shanghai') AS day_hour,
                     COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success,
-                    COALESCE(SUM(CASE WHEN te.execution_result = 'FAILED' THEN 1 ELSE 0 END), 0)::bigint AS failed,
+                    COUNT(*) FILTER (WHERE te.execution_result = 'FAILED')::bigint AS failed,
                     COUNT(*)::bigint AS total,
                     COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
                     COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
+                    COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
                     COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
                     COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach,
-                    COALESCE(SUM(ur.credits_used), 0)::bigint AS credits,
                     COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float / 3600.0 AS runtime_h
                 FROM task_execution te
                 LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
-                LEFT JOIN usage_record ur ON ur.task_id = te.id::varchar
                 JOIN users u ON u.id = te.user_id
-                WHERE te.started_at >= DATE_TRUNC('day', NOW())
+                WHERE COALESCE(te.finished_at, te.started_at) >= (
+                          DATE_TRUNC('day', NOW() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai'
+                      )
+                  AND COALESCE(te.finished_at, te.started_at) < (
+                          (DATE_TRUNC('day', NOW() AT TIME ZONE 'Asia/Shanghai') + INTERVAL '1 day')
+                          AT TIME ZONE 'Asia/Shanghai'
+                      )
                   AND u.tenant_id = $1
                   AND NOT te.is_deleted AND NOT u.is_deleted
-                GROUP BY DATE_TRUNC('hour', te.started_at)
+                GROUP BY DATE_TRUNC('hour', COALESCE(te.finished_at, te.started_at) AT TIME ZONE 'Asia/Shanghai')
+            ),
+            ur_agg AS (
+                SELECT
+                    DATE_TRUNC('hour', COALESCE(ur.end_time, ur.start_time, ur.created_at) AT TIME ZONE 'Asia/Shanghai') AS day_hour,
+                    COALESCE(SUM(ur.credits_used), 0)::bigint AS credits
+                FROM usage_record ur
+                JOIN users u ON u.id = ur.user_id
+                WHERE COALESCE(ur.end_time, ur.start_time, ur.created_at) >= (
+                          DATE_TRUNC('day', NOW() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai'
+                      )
+                  AND COALESCE(ur.end_time, ur.start_time, ur.created_at) < (
+                          (DATE_TRUNC('day', NOW() AT TIME ZONE 'Asia/Shanghai') + INTERVAL '1 day')
+                          AT TIME ZONE 'Asia/Shanghai'
+                      )
+                  AND u.tenant_id = $1
+                  AND NOT u.is_deleted
+                GROUP BY DATE_TRUNC('hour', COALESCE(ur.end_time, ur.start_time, ur.created_at) AT TIME ZONE 'Asia/Shanghai')
             )
             SELECT
                 hours.day_hour AS day_hour,
@@ -1124,12 +1146,14 @@ async def stats_trend(pool: Pool, days: int, tenant_id: int) -> dict[str, list[A
                 COALESCE(te_agg.total, 0) AS total,
                 COALESCE(te_agg.comments, 0) AS comments,
                 COALESCE(te_agg.likes, 0) AS likes,
+                COALESCE(te_agg.saves, 0) AS saves,
                 COALESCE(te_agg.dms, 0) AS dms,
                 COALESCE(te_agg.reach, 0) AS reach,
-                COALESCE(te_agg.credits, 0) AS credits,
+                COALESCE(ur_agg.credits, 0) AS credits,
                 COALESCE(te_agg.runtime_h, 0) AS runtime_h
             FROM hours
             LEFT JOIN te_agg USING (day_hour)
+            LEFT JOIN ur_agg USING (day_hour)
             ORDER BY hours.day_hour
             """,
             tenant_id,
@@ -1143,32 +1167,55 @@ async def stats_trend(pool: Pool, days: int, tenant_id: int) -> dict[str, list[A
             f"""
             WITH dates AS (
                 SELECT generate_series(
-                    (NOW()::date - ($2::int - 1)),
-                    NOW()::date,
+                    ((NOW() AT TIME ZONE 'Asia/Shanghai')::date - ($2::int - 1)),
+                    (NOW() AT TIME ZONE 'Asia/Shanghai')::date,
                     INTERVAL '1 day'
                 )::date AS day
             ),
             te_agg AS (
                 SELECT
-                    DATE(te.started_at) AS day,
+                    DATE(COALESCE(te.finished_at, te.started_at) AT TIME ZONE 'Asia/Shanghai') AS day,
                     COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success,
-                    COALESCE(SUM(CASE WHEN te.execution_result = 'FAILED' THEN 1 ELSE 0 END), 0)::bigint AS failed,
+                    COUNT(*) FILTER (WHERE te.execution_result = 'FAILED')::bigint AS failed,
                     COUNT(*)::bigint AS total,
                     COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
                     COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
+                    COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
                     COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
                     COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach,
-                    COALESCE(SUM(ur.credits_used), 0)::bigint AS credits,
                     COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float / 3600.0 AS runtime_h
                 FROM task_execution te
                 LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
-                LEFT JOIN usage_record ur ON ur.task_id = te.id::varchar
                 JOIN users u ON u.id = te.user_id
-                WHERE te.started_at >= (NOW()::date - ($2::int - 1))
-                  AND te.started_at < (NOW()::date + INTERVAL '1 day')
+                WHERE COALESCE(te.finished_at, te.started_at) >= (
+                          (((NOW() AT TIME ZONE 'Asia/Shanghai')::date - ($2::int - 1))::timestamp)
+                          AT TIME ZONE 'Asia/Shanghai'
+                      )
+                  AND COALESCE(te.finished_at, te.started_at) < (
+                          (((NOW() AT TIME ZONE 'Asia/Shanghai')::date + 1)::timestamp)
+                          AT TIME ZONE 'Asia/Shanghai'
+                      )
                   AND u.tenant_id = $1
                   AND NOT te.is_deleted AND NOT u.is_deleted
-                GROUP BY DATE(te.started_at)
+                GROUP BY DATE(COALESCE(te.finished_at, te.started_at) AT TIME ZONE 'Asia/Shanghai')
+            ),
+            ur_agg AS (
+                SELECT
+                    DATE(COALESCE(ur.end_time, ur.start_time, ur.created_at) AT TIME ZONE 'Asia/Shanghai') AS day,
+                    COALESCE(SUM(ur.credits_used), 0)::bigint AS credits
+                FROM usage_record ur
+                JOIN users u ON u.id = ur.user_id
+                WHERE COALESCE(ur.end_time, ur.start_time, ur.created_at) >= (
+                          (((NOW() AT TIME ZONE 'Asia/Shanghai')::date - ($2::int - 1))::timestamp)
+                          AT TIME ZONE 'Asia/Shanghai'
+                      )
+                  AND COALESCE(ur.end_time, ur.start_time, ur.created_at) < (
+                          (((NOW() AT TIME ZONE 'Asia/Shanghai')::date + 1)::timestamp)
+                          AT TIME ZONE 'Asia/Shanghai'
+                      )
+                  AND u.tenant_id = $1
+                  AND NOT u.is_deleted
+                GROUP BY DATE(COALESCE(ur.end_time, ur.start_time, ur.created_at) AT TIME ZONE 'Asia/Shanghai')
             )
             SELECT
                 dates.day AS day,
@@ -1177,12 +1224,14 @@ async def stats_trend(pool: Pool, days: int, tenant_id: int) -> dict[str, list[A
                 COALESCE(te_agg.total, 0) AS total,
                 COALESCE(te_agg.comments, 0) AS comments,
                 COALESCE(te_agg.likes, 0) AS likes,
+                COALESCE(te_agg.saves, 0) AS saves,
                 COALESCE(te_agg.dms, 0) AS dms,
                 COALESCE(te_agg.reach, 0) AS reach,
-                COALESCE(te_agg.credits, 0) AS credits,
+                COALESCE(ur_agg.credits, 0) AS credits,
                 COALESCE(te_agg.runtime_h, 0) AS runtime_h
             FROM dates
             LEFT JOIN te_agg USING (day)
+            LEFT JOIN ur_agg USING (day)
             ORDER BY dates.day
             """,
             tenant_id,
@@ -1197,6 +1246,7 @@ async def stats_trend(pool: Pool, days: int, tenant_id: int) -> dict[str, list[A
         "total": [row["total"] for row in rows],
         "comments": [row["comments"] for row in rows],
         "likes": [row["likes"] for row in rows],
+        "saves": [row["saves"] for row in rows],
         "dms": [row["dms"] for row in rows],
         "reach": [row["reach"] for row in rows],
         "credits": [row["credits"] for row in rows],
@@ -1547,27 +1597,51 @@ async def get_account_week_summary(pool: Pool, account_id: int, tenant_id: int) 
         ),
         pool.fetchrow(
             f"""
+            WITH te_summary AS (
+                SELECT
+                    COUNT(te.id) FILTER (WHERE {_success_filter_sql('te')})::bigint AS complete,
+                    COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float / 3600 AS runtime_h,
+                    COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach,
+                    COALESCE(SUM(ebs.comment_count), 0)::bigint AS comment,
+                    COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
+                    COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
+                    COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms
+                FROM task_execution te
+                LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
+                JOIN users u ON u.id = te.user_id
+                WHERE u.id = $1
+                  AND u.tenant_id = $2
+                  AND COALESCE(te.finished_at, te.started_at) >= $3
+                  AND COALESCE(te.finished_at, te.started_at) < $4
+                  AND NOT te.is_deleted
+                  AND NOT u.is_deleted
+            ),
+            credit_summary AS (
+                SELECT
+                    COALESCE(SUM(ABS(cf.change_amount)) FILTER (WHERE cf.change_type = 'CONSUME'), 0)::bigint AS credits
+                FROM usage_record ur
+                JOIN users u ON u.id = ur.user_id
+                LEFT JOIN credit_flow cf ON cf.ref_type = 'usage'
+                                         AND cf.ref_id ~ '^[0-9]+$'
+                                         AND CASE WHEN cf.ref_id ~ '^[0-9]+$' THEN cf.ref_id::int END = ur.id
+                                         AND cf.change_type = 'CONSUME'
+                WHERE u.id = $1
+                  AND u.tenant_id = $2
+                  AND COALESCE(ur.end_time, ur.start_time, ur.created_at) >= $3
+                  AND COALESCE(ur.end_time, ur.start_time, ur.created_at) < $4
+                  AND NOT u.is_deleted
+            )
             SELECT
-                COUNT(te.id) FILTER (WHERE {_success_filter_sql('te')})::bigint AS complete,
-                COALESCE(SUM(ABS(cf.change_amount)) FILTER (WHERE cf.change_type = 'CONSUME'), 0)::bigint AS credits,
-                COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float / 3600 AS runtime_h,
-                COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach,
-                COALESCE(SUM(ebs.comment_count), 0)::bigint AS comment,
-                COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
-                COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
-                COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms
-            FROM users u
-            LEFT JOIN task_execution te ON te.user_id = u.id
-                AND COALESCE(te.finished_at, te.started_at) >= $3
-                AND COALESCE(te.finished_at, te.started_at) < $4
-                AND NOT te.is_deleted
-            LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
-            LEFT JOIN usage_record ur ON ur.task_id = te.id::varchar
-            LEFT JOIN credit_flow cf ON cf.ref_type = 'usage'
-                                     AND cf.ref_id ~ '^[0-9]+$'
-                                     AND CASE WHEN cf.ref_id ~ '^[0-9]+$' THEN cf.ref_id::int END = ur.id
-                                     AND cf.change_type = 'CONSUME'
-            WHERE u.id = $1 AND u.tenant_id = $2 AND NOT u.is_deleted
+                COALESCE(te_summary.complete, 0)::bigint AS complete,
+                COALESCE(credit_summary.credits, 0)::bigint AS credits,
+                COALESCE(te_summary.runtime_h, 0)::float AS runtime_h,
+                COALESCE(te_summary.reach, 0)::bigint AS reach,
+                COALESCE(te_summary.comment, 0)::bigint AS comment,
+                COALESCE(te_summary.likes, 0)::bigint AS likes,
+                COALESCE(te_summary.saves, 0)::bigint AS saves,
+                COALESCE(te_summary.dms, 0)::bigint AS dms
+            FROM te_summary
+            CROSS JOIN credit_summary
             """,
             account_id,
             tenant_id,
