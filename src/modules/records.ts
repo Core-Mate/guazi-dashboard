@@ -463,40 +463,58 @@ export async function renderTransactions(page, pageSize) {
   renderDateFilter('transactions')
   var body = document.getElementById('transactions-tbody')
   var state = paginationState.transactions
+  var showTimer: ReturnType<typeof setTimeout> | null = null
   if (!body) {
     syncRecordSortHeaders('transactions', txSortKey, txSortDir)
     return
   }
   if (typeof page === 'number') state.page = page
   if (typeof pageSize === 'number') state.pageSize = pageSize
-  var data = await fetchTransactions(state.page, state.pageSize)
-  applyTransactionState(data)
-  var totalPages = Math.max(1, Math.ceil(Math.max(transactionState.total, 1) / state.pageSize))
-  if (state.page > totalPages) {
-    state.page = totalPages
-    return renderTransactions(state.page, state.pageSize)
+  showTimer = setTimeout(function() {
+    body.classList.add('is-loading')
+  }, 150)
+  try {
+    var data = await fetchTransactions(state.page, state.pageSize)
+    applyTransactionState(data)
+    var totalPages = Math.max(1, Math.ceil(Math.max(transactionState.total, 1) / state.pageSize))
+    if (state.page > totalPages) {
+      state.page = totalPages
+      return renderTransactions(state.page, state.pageSize)
+    }
+    paintTransactions()
+  } finally {
+    if (showTimer) clearTimeout(showTimer)
+    body.classList.remove('is-loading')
   }
-  paintTransactions()
 }
 
 export async function renderOplog(page, pageSize) {
   renderDateFilter('oplog')
   var body = document.getElementById('oplog-tbody')
   var state = paginationState.oplog
+  var showTimer: ReturnType<typeof setTimeout> | null = null
   if (!body) {
     syncRecordSortHeaders('oplog', oplogSortKey, oplogSortDir)
     return
   }
   if (typeof page === 'number') state.page = page
   if (typeof pageSize === 'number') state.pageSize = pageSize
-  var data = await fetchAuditLog(state.page, state.pageSize)
-  applyOplogState(data)
-  var totalPages = Math.max(1, Math.ceil(Math.max(oplogState.total, 1) / state.pageSize))
-  if (state.page > totalPages) {
-    state.page = totalPages
-    return renderOplog(state.page, state.pageSize)
+  showTimer = setTimeout(function() {
+    body.classList.add('is-loading')
+  }, 150)
+  try {
+    var data = await fetchAuditLog(state.page, state.pageSize)
+    applyOplogState(data)
+    var totalPages = Math.max(1, Math.ceil(Math.max(oplogState.total, 1) / state.pageSize))
+    if (state.page > totalPages) {
+      state.page = totalPages
+      return renderOplog(state.page, state.pageSize)
+    }
+    paintOplog()
+  } finally {
+    if (showTimer) clearTimeout(showTimer)
+    body.classList.remove('is-loading')
   }
-  paintOplog()
 }
 
 export function changePageSize(tab, size) {
