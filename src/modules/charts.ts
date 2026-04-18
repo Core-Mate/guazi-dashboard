@@ -19,6 +19,7 @@ function getCNCurrentHour(): number {
 const futureHourMaskPlugin = {
   id: 'futureHourMask',
   afterDatasetsDraw(chart: any) {
+    if (!chart.$futureMaskEnabled) return;
     const state = chart.$futureHourMask;
     if (!state || !state.enabled) return;
     const cutoffIdx: number = state.cutoffIndex;
@@ -314,8 +315,9 @@ function getTrendTooltipLabel(context) {
   return cur.label + ': ' + rawValue.toLocaleString() + ' ' + cur.unit;
 }
 
-export function applyTrendDisplayMode() {
+export function applyTrendDisplayMode(range?: string) {
   if (!costChart) return;
+  var trendRange = range || currentRange;
   var activeKeys = getActiveTrendKeys();
   var activeCount = activeKeys.length;
   var activeMap = {};
@@ -356,12 +358,18 @@ export function applyTrendDisplayMode() {
     }
   }
 
-  applyFutureHourMask(costChart, { labels: costChart.data.labels });
+  applyFutureHourMask(costChart, { labels: costChart.data.labels }, trendRange);
   costChart.update();
 }
 
-function applyFutureHourMask(chart: any, d: any): void {
+function applyFutureHourMask(chart: any, d: any, range?: string): void {
   if (!chart) return;
+  chart.$futureMaskEnabled = (range === 'today');
+  if (!chart.$futureMaskEnabled) {
+    chart.$cutoffIndex = -1;
+    chart.$futureHourMask = { enabled: false };
+    return;
+  }
   var labels = d && d.labels;
   var isTodayHourly = Array.isArray(labels)
     && labels.length === 24
@@ -379,8 +387,10 @@ function applyFutureHourMask(chart: any, d: any): void {
       }
       dataset.data = nextData;
     });
+    chart.$cutoffIndex = currentHour;
     chart.$futureHourMask = { enabled: true, cutoffIndex: currentHour };
   } else {
+    chart.$cutoffIndex = -1;
     chart.$futureHourMask = { enabled: false };
   }
 }
@@ -740,13 +750,13 @@ export function ensureOpsCharts() {
       },
     } as any
   });
-  applyTrendDisplayMode();
+  applyTrendDisplayMode(currentRange);
   getTrendToggles().forEach(function(toggle) {
     if ((toggle as any).__trendBound) return;
     (toggle as any).__trendBound = true;
     toggle.addEventListener('click', function() {
       this.classList.toggle('active');
-      applyTrendDisplayMode();
+      applyTrendDisplayMode(currentRange);
     });
   });
 }
@@ -761,7 +771,7 @@ export function updateCharts(range: string, opsData?: any) {
   if (costChart) {
     costChart.data.labels = d.labels;
     costChart.data.datasets = buildTrendDatasets() as any;
-    applyTrendDisplayMode();
+    applyTrendDisplayMode(currentRange);
   }
   setIf('costAvg', d.costAvg ? d.costAvg.replace(' 算力豆','') : '');
   setIf('opsTrendDesc', d.trendDesc || '');
