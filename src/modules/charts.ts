@@ -466,6 +466,7 @@ export function drawSparkline(canvas, data, color) {
 
 function getCompareLabel(range, customLen?) {
   if (range === 'today') return '同比昨日';
+  if (range === 'yesterday') return '同比前日';
   if (range === '7d') return '同比上周';
   if (range === '30d') return '同比上月';
   if (range === 'custom' && customLen) return '同比前 ' + customLen + ' 天';
@@ -565,6 +566,27 @@ function createPopoutChart(canvas, card: HighlightCard, color) {
 
 function destroyPopoutChart() {
   if (_popoutChart) { _popoutChart.destroy(); _popoutChart = null; }
+}
+
+function positionHighlightPopout(popout: HTMLElement, card: HTMLElement) {
+  const bounds = getContentClampBounds();
+  const cardRect = card.getBoundingClientRect();
+  const anchorLeft = cardRect.left + cardRect.width / 2;
+  const anchorTop = cardRect.bottom + 8;
+
+  popout.style.left = anchorLeft + 'px';
+  popout.style.top = anchorTop + 'px';
+  popout.style.transform = 'translateX(-50%) translateY(0)';
+
+  requestAnimationFrame(function() {
+    const r = popout.getBoundingClientRect();
+    let dx = 0;
+    if (r.left < bounds.left) dx = bounds.left - r.left;
+    else if (r.right > bounds.right) dx = bounds.right - r.right;
+    if (dx !== 0) {
+      popout.style.transform = 'translateX(calc(-50% + ' + dx + 'px)) translateY(0)';
+    }
+  });
 }
 
 export function renderHighlightCards(cards: HighlightCard[], range?, customLen?) {
@@ -675,22 +697,16 @@ function bindPopoutEvents(cards: HighlightCard[]) {
       if (canvas && item) createPopoutChart(canvas, item, color);
       var popout = el.querySelector('.highlight-popout') as HTMLElement | null;
       if (!popout) return;
-      popout.style.transform = '';
-      requestAnimationFrame(function() {
-        var r = popout.getBoundingClientRect();
-        var bounds = getContentClampBounds();
-        var dx = 0;
-        if (r.left < bounds.left) dx = bounds.left - r.left;
-        else if (r.right > bounds.right) dx = bounds.right - r.right;
-        if (dx !== 0) {
-          popout.style.transform = 'translateX(calc(-50% + ' + dx + 'px)) translateY(0)';
-        }
-      });
+      positionHighlightPopout(popout, el);
     };
     el.onmouseleave = function() {
       destroyPopoutChart();
       var popout = el.querySelector('.highlight-popout') as HTMLElement | null;
-      if (popout) popout.style.transform = '';
+      if (popout) {
+        popout.style.left = '';
+        popout.style.top = '';
+        popout.style.transform = '';
+      }
     };
   });
 }

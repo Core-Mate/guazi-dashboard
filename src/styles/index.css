@@ -430,9 +430,9 @@
 
   /* ── hover popout panel ── */
   .highlight-popout {
-    position: absolute;
-    top: 100%;
-    left: 50%;
+    position: fixed;
+    top: 0;
+    left: 0;
     transform: translateX(-50%) translateY(4px);
     width: clamp(260px, 20vw + 80px, 420px);
     background: #fff;

@@ -30,25 +30,6 @@ function getLocalDateStr(d?: Date): string {
     String(date.getDate()).padStart(2, '0')
 }
 
-function resolvePresetRange(range: string): { startDate: string; endDate: string } | null {
-  var startDate = ''
-  var endDate = ''
-
-  switch (range) {
-    case 'yesterday': {
-      const now = new Date()
-      const y = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)
-      startDate = getLocalDateStr(y)
-      endDate = getLocalDateStr(y)
-      break
-    }
-    default:
-      return null
-  }
-
-  return { startDate: startDate, endDate: endDate }
-}
-
 function triggerSnapshotBoot(range: string, custom?: { start: string; end: string }) {
   var boot = (window as any).bootDashboardSnapshot
   showLoader()
@@ -98,12 +79,6 @@ export function setRange(range, btn) {
   var customBtn = allBtns[allBtns.length - 1];
   if (customBtn && customBtn !== btn) customBtn.textContent = '自定义';
   setHighlightLoading();
-  var presetRange = resolvePresetRange(range);
-  if (presetRange) {
-    setCurrentRange('custom');
-    triggerSnapshotBoot('custom', { start: presetRange.startDate, end: presetRange.endDate });
-    return;
-  }
   setCurrentRange(range);
   triggerSnapshotBoot(range);
 }

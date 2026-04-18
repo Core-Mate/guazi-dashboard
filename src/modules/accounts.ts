@@ -10,7 +10,6 @@ var accountSortState: { col: string; dir: 'asc' | 'desc' } = { col: '', dir: 'as
 var accountSearchQuery = '';
 var accountSummarySuccessCount = 0;
 var accountHoverCardEl: HTMLElement | null = null
-var accountHoverTimer: number | null = null
 var accountHoverRow: HTMLElement | null = null
 var accountHoverRowId = ''
 var accountHoverCache: Record<string, AccountWeekSummary> = {}
@@ -80,12 +79,6 @@ function formatRuntimeHours(value: any): string {
   return hours > 0 ? hours.toFixed(1) + 'h' : '0.0h'
 }
 
-function clearAccountHoverTimer() {
-  if (accountHoverTimer == null) return
-  window.clearTimeout(accountHoverTimer)
-  accountHoverTimer = null
-}
-
 function ensureAccountHoverCard(): HTMLElement {
   if (accountHoverCardEl) return accountHoverCardEl
   var card = document.createElement('div')
@@ -112,6 +105,22 @@ function ensureAccountHoverCard(): HTMLElement {
   if (!accountHoverGlobalsBound) {
     window.addEventListener('scroll', hideAccountHoverCard, true)
     window.addEventListener('resize', hideAccountHoverCard)
+    document.addEventListener('click', function(e: Event) {
+      var target = e.target as Node | null
+      if (!target) {
+        hideAccountHoverCard()
+        return
+      }
+      if (accountHoverCardEl && accountHoverCardEl.contains(target)) return
+      if (target instanceof Element) {
+        var row = target.closest('tr[data-account-id]') as HTMLElement | null
+        if (row && accountHoverRow === row && accountHoverCardEl && accountHoverCardEl.classList.contains('visible')) return
+      }
+      hideAccountHoverCard()
+    })
+    window.addEventListener('keydown', function(e: KeyboardEvent) {
+      if (e.key === 'Escape') hideAccountHoverCard()
+    })
     accountHoverGlobalsBound = true
   }
   return card
@@ -201,7 +210,6 @@ function renderAccountHoverSummary(row: HTMLElement, data: AccountWeekSummary) {
 }
 
 function hideAccountHoverCard() {
-  clearAccountHoverTimer()
   accountHoverRow = null
   accountHoverRowId = ''
   if (accountHoverCardEl) accountHoverCardEl.classList.remove('visible')
@@ -224,52 +232,43 @@ function loadAccountHoverSummary(accountId: string, tenantId: string): Promise<A
   return pending
 }
 
-function scheduleAccountHoverCard(row: HTMLElement) {
+function toggleAccountHoverCard(row: HTMLElement) {
   var accountId = String(row.getAttribute('data-account-id') || '').trim()
   if (!accountId) return
-  clearAccountHoverTimer()
+  if (accountHoverRow === row && accountHoverRowId === accountId && accountHoverCardEl && accountHoverCardEl.classList.contains('visible')) {
+    hideAccountHoverCard()
+    return
+  }
   accountHoverRow = row
   accountHoverRowId = accountId
-  accountHoverTimer = window.setTimeout(function() {
-    accountHoverTimer = null
+  if (accountHoverCache[accountId]) {
+    renderAccountHoverSummary(row, accountHoverCache[accountId])
+    return
+  }
+  if (accountHoverErrorCache[accountId]) {
+    renderAccountHoverError(row, accountId)
+    return
+  }
+  renderAccountHoverLoading(row, accountId)
+  loadAccountHoverSummary(accountId, getDashboardTenantId()).then(function(data) {
     if (accountHoverRow !== row || accountHoverRowId !== accountId) return
-    if (accountHoverCache[accountId]) {
-      renderAccountHoverSummary(row, accountHoverCache[accountId])
-      return
-    }
-    if (accountHoverErrorCache[accountId]) {
-      renderAccountHoverError(row, accountId)
-      return
-    }
-    renderAccountHoverLoading(row, accountId)
-    loadAccountHoverSummary(accountId, getDashboardTenantId()).then(function(data) {
-      if (accountHoverRow !== row || accountHoverRowId !== accountId) return
-      renderAccountHoverSummary(row, data)
-    }).catch(function() {
-      if (accountHoverRow !== row || accountHoverRowId !== accountId) return
-      renderAccountHoverError(row, accountId)
-    })
-  }, 200)
+    renderAccountHoverSummary(row, data)
+  }).catch(function() {
+    if (accountHoverRow !== row || accountHoverRowId !== accountId) return
+    renderAccountHoverError(row, accountId)
+  })
 }
 
 function bindAccountHoverCard(tbody: HTMLElement) {
   var boundBody = tbody as HTMLElement & { __accountHoverBound?: boolean }
   if (boundBody.__accountHoverBound) return
   boundBody.__accountHoverBound = true
-  tbody.addEventListener('mouseover', function(e: Event) {
+  tbody.addEventListener('click', function(e: Event) {
     var target = e.target as HTMLElement | null
     if (!target) return
     var row = target.closest('tr[data-account-id]') as HTMLElement | null
     if (!row || !tbody.contains(row)) return
-    if (accountHoverRow === row && accountHoverCardEl && accountHoverCardEl.classList.contains('visible')) return
-    if (accountHoverRow && accountHoverRow !== row) {
-      clearAccountHoverTimer()
-      if (accountHoverCardEl) accountHoverCardEl.classList.remove('visible')
-    }
-    scheduleAccountHoverCard(row)
-  })
-  tbody.addEventListener('mouseleave', function() {
-    hideAccountHoverCard()
+    toggleAccountHoverCard(row)
   })
 }
 

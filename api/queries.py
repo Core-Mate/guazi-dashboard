@@ -110,6 +110,20 @@ def _resolve_window(
         prev_end = today_start
         return (cur_start, cur_end, prev_start, prev_end, "较昨日", "hour", 24)
 
+    if range_param == "yesterday":
+        local_today = datetime.now().astimezone().date()
+        yesterday_date = local_today - timedelta(days=1)
+        cur_start = datetime(
+            yesterday_date.year,
+            yesterday_date.month,
+            yesterday_date.day,
+            tzinfo=CN_TZ,
+        )
+        cur_end = cur_start + timedelta(days=1)
+        prev_start = cur_start - timedelta(days=1)
+        prev_end = cur_start
+        return (cur_start, cur_end, prev_start, prev_end, "较前日", "day", 1)
+
     if range_param == "7d":
         cur_start = today_start - timedelta(days=6)
         cur_end = now
