@@ -4,11 +4,55 @@ import asyncio
 import json
 import re
 import sys
-from collections import defaultdict
+import time
+from collections import OrderedDict, defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from asyncpg import Pool
+
+try:
+    from cachetools import TTLCache
+except ImportError:  # pragma: no cover
+    class TTLCache:
+        def __init__(self, maxsize: int, ttl: float):
+            self.maxsize = maxsize
+            self.ttl = ttl
+            self._data: OrderedDict[Any, tuple[Any, float]] = OrderedDict()
+
+        def _expire(self) -> None:
+            now = time.monotonic()
+            expired_keys = [
+                key for key, (_, expires_at) in self._data.items()
+                if expires_at <= now
+            ]
+            for key in expired_keys:
+                self._data.pop(key, None)
+
+        def get(self, key: Any, default: Any = None) -> Any:
+            self._expire()
+            entry = self._data.get(key)
+            if entry is None:
+                return default
+
+            value, expires_at = entry
+            if expires_at <= time.monotonic():
+                self._data.pop(key, None)
+                return default
+
+            self._data.move_to_end(key)
+            return value
+
+        def __setitem__(self, key: Any, value: Any) -> None:
+            self._expire()
+            if key in self._data:
+                self._data.pop(key, None)
+            elif len(self._data) >= self.maxsize:
+                self._data.popitem(last=False)
+            self._data[key] = (value, time.monotonic() + self.ttl)
+
+        def clear(self) -> None:
+            self._data.clear()
 
 TENANT_SCOPED_TABLES = {
     "users", "credit_flow", "task_execution", "task_draft",
@@ -23,6 +67,9 @@ except ImportError:  # pragma: no cover
 
 
 CN_TZ = timezone(timedelta(hours=8))
+_snapshot_cache = TTLCache(maxsize=200, ttl=90)
+_cache_lock = asyncio.Lock()
+_CACHE_MISS = object()
 
 # CANONICAL SUCCESS FILTER: execution_result = 'SUCCEED' — change only here
 def _success_filter_sql(alias: str = "te") -> str:
@@ -1169,7 +1216,7 @@ async def aggregate_charts(
 # 5. /api/dashboard/snapshot - 一次拉取首屏全部数据
 # ────────────────────────────────────────────────────────────────
 
-async def aggregate_snapshot(
+async def _actual_aggregate_snapshot(
     pool: Pool,
     tenant_id: int,
     range_param: str,
@@ -1219,6 +1266,28 @@ async def aggregate_snapshot(
         "charts": charts,
         "ops_trend": ops_trend,
     }
+
+
+async def aggregate_snapshot(
+    pool: Pool,
+    tenant_id: int,
+    range_param: str,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> dict[str, Any]:
+    cache_key = (tenant_id, range_param, start, end)
+    cached_snapshot = _snapshot_cache.get(cache_key, _CACHE_MISS)
+    if cached_snapshot is not _CACHE_MISS:
+        return cached_snapshot
+
+    async with _cache_lock:
+        cached_snapshot = _snapshot_cache.get(cache_key, _CACHE_MISS)
+        if cached_snapshot is not _CACHE_MISS:
+            return cached_snapshot
+
+        snapshot = await _actual_aggregate_snapshot(pool, tenant_id, range_param, start, end)
+        _snapshot_cache[cache_key] = snapshot
+        return snapshot
 
 
 WHITELIST = {
@@ -2332,6 +2401,7 @@ async def distribute_credits(pool: Pool, operator_id: int, target_user_id: int, 
                 tgt_user["name"],
                 tenant_id, amount, remark,
             )
+    _snapshot_cache.clear()
 
 
 async def update_member(pool: Pool, user_id: int, tenant_id: int, name: str | None, phone_number: str | None, role: str | None) -> None:
@@ -2371,6 +2441,7 @@ async def update_member(pool: Pool, user_id: int, tenant_id: int, name: str | No
                 json.dumps(dict(before), default=str),
                 json.dumps(dict(after), default=str),
             )
+    _snapshot_cache.clear()
 
 
 async def delete_member(pool: Pool, user_id: int, tenant_id: int) -> None:
@@ -2396,6 +2467,7 @@ async def delete_member(pool: Pool, user_id: int, tenant_id: int) -> None:
                 """,
                 user_id, user["name"], tenant_id, user_id, user["name"],
             )
+    _snapshot_cache.clear()
 
 
 async def add_member(pool: Pool, name: str, phone_number: str, role: str | None, initial_balance: int, tenant_id: int) -> int:
@@ -2434,5 +2506,5 @@ async def add_member(pool: Pool, name: str, phone_number: str, role: str | None,
                 """,
                 new_id, name, tenant_id, new_id, name, initial_balance,
             )
-
-            return new_id
+    _snapshot_cache.clear()
+    return new_id

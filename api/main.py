@@ -1,5 +1,8 @@
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 import importlib
+import logging
+import os
 from typing import Optional
 
 import asyncpg
@@ -10,16 +13,74 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+import auth
 from auth import require_api_key
 import db
+
+logger = logging.getLogger(__name__)
+WARMUP_RANGES = ("today", "yesterday", "7d", "30d")
+
+
+def _get_warmup_tenant_ids() -> list[int]:
+    raw = os.getenv("DASHBOARD_WARMUP_TENANT_IDS", "").strip()
+    if raw:
+        tenant_ids: list[int] = []
+        for part in raw.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                tenant_ids.append(int(part))
+            except ValueError:
+                logger.warning("Skipping invalid DASHBOARD_WARMUP_TENANT_IDS entry: %s", part)
+        if tenant_ids:
+            return sorted(set(tenant_ids))
+
+    configured_tenants = sorted(set(auth.API_KEYS.values()))
+    if configured_tenants:
+        return configured_tenants
+
+    fallback_tenant = os.getenv("TENANT_ID", "1").strip()
+    try:
+        return [int(fallback_tenant)]
+    except ValueError:
+        logger.warning("Invalid TENANT_ID for warmup: %s; falling back to tenant_id=1", fallback_tenant)
+        return [1]
+
+
+async def _warmup() -> None:
+    try:
+        pool = await db.get_pool()
+        queries = get_queries_module()
+        for tenant_id in _get_warmup_tenant_ids():
+            for range_value in WARMUP_RANGES:
+                try:
+                    await queries.aggregate_snapshot(pool, tenant_id, range_value)
+                    logger.info(
+                        "Dashboard snapshot warmup completed for tenant_id=%s range=%s",
+                        tenant_id,
+                        range_value,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Dashboard snapshot warmup failed for tenant_id=%s range=%s",
+                        tenant_id,
+                        range_value,
+                    )
+    except Exception:
+        logger.exception("Dashboard snapshot warmup initialization failed")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.init_pool()
+    warmup_task = asyncio.create_task(_warmup())
     try:
         yield
     finally:
+        warmup_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await warmup_task
         await db.close_pool()
 
 
