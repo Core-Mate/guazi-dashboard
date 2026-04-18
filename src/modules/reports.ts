@@ -5,6 +5,24 @@ import { formatCompareText } from './utils'
 let currentReportBlob = null
 let currentReportDim = 'week'
 let roiPlatformChart = null
+let currentReportSwitchRequestId = 0
+
+function wait(ms: number) {
+  return new Promise<void>(function(resolve) {
+    window.setTimeout(resolve, ms)
+  })
+}
+
+function createReportLoadingOverlay(text: string): HTMLDivElement {
+  var overlay = document.createElement('div')
+  overlay.className = 'report-loading-overlay'
+  overlay.innerHTML = '<div class="loader-spinner"></div><div class="loader-text">' + text + '</div>'
+  return overlay
+}
+
+function getReportLabel(dim: string): string {
+  return { day: '日报', week: '周报', month: '月报' }[dim] ?? dim
+}
 
 function getLocalDateStr(d?: Date): string {
   var date = d || new Date()
@@ -852,7 +870,13 @@ export async function switchReportDim(dim, btn) {
   btn.parentElement.querySelectorAll('.report-dim-btn').forEach(function(b) { b.classList.remove('active'); });
   btn.classList.add('active');
   var saveBtn = document.getElementById('reportSaveBtn') as HTMLButtonElement | null;
-  if (!saveBtn) return;
+  var reportBody = document.querySelector('#reportOverlay .report-body') as HTMLElement | null;
+  if (!saveBtn || !reportBody) return;
+  var requestId = ++currentReportSwitchRequestId;
+  reportBody.querySelectorAll('.report-loading-overlay').forEach(function(node) { node.remove(); });
+  var overlay = createReportLoadingOverlay('正在生成' + getReportLabel(dim) + '...');
+  reportBody.appendChild(overlay);
+  var minDelay = wait(400);
   saveBtn.textContent = '生成中...';
   saveBtn.disabled = true;
   try {
@@ -873,13 +897,15 @@ export async function switchReportDim(dim, btn) {
         reject(new Error('生成图片失败'));
       }, 'image/png');
     });
+    await minDelay;
+    if (requestId !== currentReportSwitchRequestId) return;
     currentReportBlob = blob;
     var url = URL.createObjectURL(currentReportBlob);
     var previewImg = document.getElementById('reportPreviewImg') as HTMLImageElement | null;
     if (previewImg) previewImg.src = url;
     saveBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 保存图片';
-    var wrap = document.querySelector('#reportOverlay .report-body') as HTMLElement | null;
-    if (wrap && wrap.id !== 'reportContent') wrap.id = 'reportContent';
+    var wrap = reportBody;
+    if (wrap.id !== 'reportContent') wrap.id = 'reportContent';
     wrap = document.getElementById('reportContent');
     if (wrap) {
       wrap.classList.remove('report-content-enter');
@@ -887,8 +913,12 @@ export async function switchReportDim(dim, btn) {
       wrap.classList.add('report-content-enter');
     }
   } catch(e) {
+    await minDelay;
+    if (requestId !== currentReportSwitchRequestId) return;
     saveBtn.textContent = '生成失败';
   } finally {
-    saveBtn.disabled = false;
+    await minDelay;
+    overlay.remove();
+    if (requestId === currentReportSwitchRequestId) saveBtn.disabled = false;
   }
 }

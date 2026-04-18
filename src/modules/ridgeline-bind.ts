@@ -11,6 +11,28 @@ const PALETTE = [
   '#a5f3fc',
 ]
 
+function delay(ms: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, ms)
+  })
+}
+
+async function switchOpsChartView(oldView: HTMLElement, newView: HTMLElement, newViewDisplay = '') {
+  if (oldView === newView) return
+  oldView.classList.remove('entering')
+  oldView.classList.add('leaving')
+  await delay(220)
+  oldView.style.display = 'none'
+  oldView.classList.remove('leaving', 'entered')
+  newView.style.display = newViewDisplay
+  newView.classList.remove('leaving')
+  newView.classList.add('ops-view-swap', 'entering')
+  requestAnimationFrame(() => {
+    newView.classList.remove('entering')
+    newView.classList.add('entered')
+  })
+}
+
 function buildRidgelineSeries(snap: any): { labels: string[]; seriesList: RidgelineSeries[] } {
   const ot = snap?.ops_trend || {}
   const labels = ot.labels || []
@@ -41,7 +63,18 @@ export function bindRidgelineToggle() {
   if ((window as any).__ridgelineBound) return
   ;(window as any).__ridgelineBound = true
 
-  document.addEventListener('click', (e) => {
+  const initialChart = document.getElementById('opsTaskChart')
+  const initialRidge = document.getElementById('opsRidgelineContainer') as HTMLElement | null
+  const initialChartContainer = initialChart?.parentElement as HTMLElement | null
+  if (initialChartContainer) {
+    initialChartContainer.classList.add('ops-view-swap', 'entered')
+  }
+  if (initialRidge) {
+    initialRidge.classList.add('ops-view-swap')
+    if (initialRidge.style.display !== 'none') initialRidge.classList.add('entered')
+  }
+
+  document.addEventListener('click', async (e) => {
     const target = (e.target as HTMLElement).closest('.chart-view-btn') as HTMLElement | null
     if (!target) return
     const view = target.dataset.view
@@ -52,18 +85,19 @@ export function bindRidgelineToggle() {
 
     const chart2d = document.getElementById('opsTaskChart')
     const ridgeCtn = document.getElementById('opsRidgelineContainer')
+    const chartContainer = chart2d?.parentElement as HTMLElement | null
     const toggles = document.querySelector('.chart-toggles') as HTMLElement
-    if (!chart2d || !ridgeCtn) return
+    if (!chart2d || !ridgeCtn || !chartContainer) return
 
     if (view === 'ridge') {
-      chart2d.parentElement!.style.display = 'none'
       if (toggles) toggles.style.display = 'none'
-      ridgeCtn.style.display = 'block'
+      if (ridgeCtn.style.display !== 'none') return
+      await switchOpsChartView(chartContainer, ridgeCtn, 'block')
       refreshRidgeline((window as any).__lastSnap)
     } else {
-      chart2d.parentElement!.style.display = ''
       if (toggles) toggles.style.display = ''
-      ridgeCtn.style.display = 'none'
+      if (chartContainer.style.display !== 'none' && ridgeCtn.style.display === 'none') return
+      await switchOpsChartView(ridgeCtn, chartContainer)
     }
   })
 }

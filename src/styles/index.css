@@ -1937,3 +1937,55 @@ button.btn-loading::before {
   background: #0a0a12;
   border-radius: 10px;
 }
+
+.ops-view-swap {
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+
+.ops-view-swap.leaving {
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+}
+
+.ops-view-swap.entering {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.ops-view-swap.entered {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.report-body {
+  position: relative;
+}
+
+.report-loading-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(4px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  z-index: 10;
+  min-height: 300px;
+}
+
+.report-loading-overlay .loader-spinner {
+  width: 48px;
+  height: 48px;
+  border: 3px solid rgba(0, 0, 0, 0.1);
+  border-top-color: var(--accent-default, #3b82f6);
+  border-radius: 50%;
+  animation: globalLoaderSpin 0.9s linear infinite;
+}
+
+.report-loading-overlay .loader-text {
+  font-size: 14px;
+  color: var(--color-text-2, #475569);
+}
