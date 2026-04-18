@@ -435,14 +435,13 @@ async def _fetch_ops_trend(
         "success": [int(r["success"]) for r in rows],
         "failed": [int(r["failed"]) for r in rows],
         "total": [int(r["total"]) for r in rows],
-        "cost": credits,
         "credits": credits,
         "reach": [int(r["reach"]) for r in rows],
         "comments": [int(r["comments"]) for r in rows],
         "likes": [int(r["likes"]) for r in rows],
         "saves": [int(r["saves"]) for r in rows],
         "dms": [int(r["dms"]) for r in rows],
-        "runtime": [round(float(r["runtime_h"] or 0), 1) for r in rows],
+        "runtime_h": [round(float(r["runtime_h"] or 0), 1) for r in rows],
     }
 
 
@@ -839,17 +838,17 @@ async def aggregate_aggregations(
 
     accounts = []
     for r in account_rows:
+        runtime_h = round(float(r["duration_sec"] or 0) / 3600.0, 1)
         accounts.append({
             "id": r["user_id"],
             "user_id": r["user_id"],
             "username": r["username"] or f"user-{r['user_id']}",
             "role": r["role"],
             "device_id": r["device_id"],
-            "token_used": int(r["total_credits"]),
             "total_credits": int(r["total_credits"]),
             "success_count": int(r["success_count"]),
             "exec_count": int(r["exec_count"]),
-            "duration_sec": int(r["duration_sec"]),
+            "runtime_h": runtime_h,
             "comments": int(r["comments"]),
             "likes": int(r["likes"]),
             "saves": int(r["saves"]),
@@ -859,11 +858,10 @@ async def aggregate_aggregations(
 
     account_totals = {
         "accounts": len([a for a in accounts if a["exec_count"] > 0]),
-        "success_count": sum(a["success_count"] for a in accounts),
-        "reach": sum(a["reach"] for a in accounts),
-        "dms": sum(a["dms"] for a in accounts),
-        "comments": sum(a["comments"] for a in accounts),
-        "credits": sum(a["total_credits"] for a in accounts),
+        "success_count": sum(int(r["success_count"] or 0) for r in account_rows),
+        "total_credits": sum(int(r["total_credits"] or 0) for r in account_rows),
+        "runtime_h": round(sum(float(r["duration_sec"] or 0) for r in account_rows) / 3600.0, 1),
+        "reach": sum(int(r["reach"] or 0) for r in account_rows),
     }
 
     # 按 execution_behavior_stat 行为数据动态分组
@@ -892,7 +890,7 @@ async def aggregate_aggregations(
             "exec": int(r["exec_count"]),
             "success_count": int(r["success_count"]),
             "fail": int(r["fail_count"]),
-            "duration_sec": int(r["duration_sec"]),
+            "runtime_h": round(float(r["duration_sec"] or 0) / 3600.0, 1),
             "comments": int(r["comments"]),
             "likes": int(r["likes"]),
             "saves": int(r["saves"]),
@@ -912,6 +910,10 @@ async def aggregate_aggregations(
         g["totals"]["total_credits"] += skill_item["total_credits"]
 
     skill_groups = [g for g in groups.values() if g["skills"]]
+    skill_totals = {
+        "success_count": sum(g["totals"]["success_count"] for g in skill_groups),
+        "total_credits": sum(g["totals"]["total_credits"] for g in skill_groups),
+    }
 
     devices = []
     alert_count = 0
@@ -933,8 +935,7 @@ async def aggregate_aggregations(
             "success_count": int(r["success_count"]),
             "fail_count": fail_count,
             "fail_rate": round(fail_rate * 100),
-            "duration_sec": int(r["duration_sec"]),
-            "token_usage": 0,  # 算力豆按 user 算，device 维度暂不归属
+            "runtime_h": round(float(r["duration_sec"] or 0) / 3600.0, 1),
             "comments": int(r["comments"]),
             "likes": int(r["likes"]),
             "saves": int(r["saves"]),
@@ -958,6 +959,7 @@ async def aggregate_aggregations(
     return {
         "accounts": accounts,
         "account_totals": account_totals,
+        "skill_totals": skill_totals,
         "skill_groups": skill_groups,
         "devices": devices,
         "device_heat": device_heat,
@@ -1103,14 +1105,10 @@ async def aggregate_charts(
         "success_count": success_exec,
         "success_count_prev": prev_success_exec,
         "rate": f"{rate_pct}%",
-        "runtime": f"{runtime_h}h",
-        "runtime_raw": runtime_h,
-        "runtime_prev": prev_runtime_h,
-        "runtime_sec": runtime_sec,
-        "runtime_prev_sec": runtime_prev_sec,
-        "cost": f"{cur_credits:,}",
-        "cost_raw": cur_credits,
-        "cost_prev": prev_credits,
+        "runtime_h": runtime_h,
+        "runtime_h_prev": prev_runtime_h,
+        "total_credits": cur_credits,
+        "total_credits_prev": prev_credits,
     }
 
     # ROI 公式: value = comments*1.3 + dms*1.3 + likes*0.4 + saves*0.4
@@ -1353,9 +1351,9 @@ async def stats_overview(pool: Pool, days: int, tenant_id: int) -> dict[str, Any
         "total_executions": overview_row["total_executions"],
         "success_count": overview_row["success_count"],
         "fail_count": overview_row["fail_count"],
-        "total_credits_consumed": float(overview_row["total_credits_consumed"]),
+        "total_credits": float(overview_row["total_credits_consumed"]),
         "active_users": overview_row["active_users"],
-        "total_duration_hours": float(overview_row["total_duration_hours"]),
+        "runtime_h": float(overview_row["total_duration_hours"]),
     }
 
 
@@ -1524,7 +1522,7 @@ async def stats_trend(pool: Pool, days: int, tenant_id: int) -> dict[str, list[A
         "dms": [row["dms"] for row in rows],
         "reach": [row["reach"] for row in rows],
         "credits": [row["credits"] for row in rows],
-        "runtime": [round(float(row["runtime_h"] or 0), 1) for row in rows],
+        "runtime_h": [round(float(row["runtime_h"] or 0), 1) for row in rows],
     }
 
 
@@ -1864,7 +1862,7 @@ async def get_accounts(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
             u.name AS username,
             COALESCE(account_te_agg.exec_count, 0)::bigint AS exec_count,
             COALESCE(account_te_agg.success_count, 0)::bigint AS success_count,
-            COALESCE(account_te_agg.duration_hours, 0)::float AS duration_hours,
+            COALESCE(account_te_agg.duration_hours, 0)::float AS runtime_h,
             COALESCE(account_credit_agg.total_credits, 0)::float AS total_credits
         FROM users u
         LEFT JOIN account_te_agg ON account_te_agg.account_id = u.id
@@ -1877,8 +1875,7 @@ async def get_accounts(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
     result = []
     for row in rows:
         item = dict(row)
-        hours = item.pop("duration_hours", 0) or 0
-        item["duration"] = f"{hours:.1f}h"
+        item["runtime_h"] = round(float(item.get("runtime_h") or 0), 1)
         result.append(item)
     return result
 
@@ -1931,10 +1928,10 @@ async def get_account_week_summary(pool: Pool, account_id: int, tenant_id: int) 
             f"""
             WITH te_summary AS (
                 SELECT
-                    COUNT(te.id) FILTER (WHERE {_success_filter_sql('te')})::bigint AS complete,
+                    COUNT(te.id) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success_count,
                     COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float / 3600 AS runtime_h,
                     COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach,
-                    COALESCE(SUM(ebs.comment_count), 0)::bigint AS comment,
+                    COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
                     COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
                     COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
                     COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms
@@ -1965,11 +1962,11 @@ async def get_account_week_summary(pool: Pool, account_id: int, tenant_id: int) 
                   AND NOT u.is_deleted
             )
             SELECT
-                COALESCE(te_summary.complete, 0)::bigint AS complete,
-                COALESCE(credit_summary.credits, 0)::bigint AS credits,
+                COALESCE(te_summary.success_count, 0)::bigint AS success_count,
+                COALESCE(credit_summary.credits, 0)::bigint AS total_credits,
                 COALESCE(te_summary.runtime_h, 0)::float AS runtime_h,
                 COALESCE(te_summary.reach, 0)::bigint AS reach,
-                COALESCE(te_summary.comment, 0)::bigint AS comment,
+                COALESCE(te_summary.comments, 0)::bigint AS comments,
                 COALESCE(te_summary.likes, 0)::bigint AS likes,
                 COALESCE(te_summary.saves, 0)::bigint AS saves,
                 COALESCE(te_summary.dms, 0)::bigint AS dms
@@ -1993,7 +1990,7 @@ async def get_account_week_summary(pool: Pool, account_id: int, tenant_id: int) 
             agg AS (
                 SELECT
                     DATE_TRUNC('day', COALESCE(te.finished_at, te.started_at) AT TIME ZONE 'Asia/Shanghai') AS bucket,
-                    COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS complete
+                    COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success
                 FROM task_execution te
                 JOIN users u ON u.id = te.user_id
                 WHERE u.id = $1
@@ -2004,7 +2001,7 @@ async def get_account_week_summary(pool: Pool, account_id: int, tenant_id: int) 
                   AND NOT u.is_deleted
                 GROUP BY bucket
             )
-            SELECT s.bucket, COALESCE(a.complete, 0)::bigint AS complete
+            SELECT s.bucket, COALESCE(a.success, 0)::bigint AS success
             FROM series s
             LEFT JOIN agg a ON a.bucket = s.bucket
             ORDER BY s.bucket
@@ -2029,16 +2026,16 @@ async def get_account_week_summary(pool: Pool, account_id: int, tenant_id: int) 
             "platforms": list(account_row["platforms"] or []),
         },
         "summary": {
-            "complete": int(summary.get("complete") or 0),
-            "credits": int(summary.get("credits") or 0),
+            "success_count": int(summary.get("success_count") or 0),
+            "total_credits": int(summary.get("total_credits") or 0),
             "runtime_h": round(float(summary.get("runtime_h") or 0), 1),
             "reach": int(summary.get("reach") or 0),
-            "comment": int(summary.get("comment") or 0),
+            "comments": int(summary.get("comments") or 0),
             "likes": int(summary.get("likes") or 0),
             "saves": int(summary.get("saves") or 0),
             "dms": int(summary.get("dms") or 0),
         },
-        "complete_series": [int(row["complete"] or 0) for row in series_rows],
+        "success": [int(row["success"] or 0) for row in series_rows],
     }
 
 
@@ -2092,10 +2089,10 @@ async def get_task_week_summary(pool: Pool, task_id: int, tenant_id: int) -> dic
             f"""
             WITH task_te_agg AS (
                 SELECT
-                    COUNT(te.id) FILTER (WHERE {_success_filter_sql('te')})::bigint AS complete,
+                    COUNT(te.id) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success_count,
                     COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float / 3600 AS runtime_h,
                     COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach,
-                    COALESCE(SUM(ebs.comment_count), 0)::bigint AS comment,
+                    COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
                     COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
                     COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
                     COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
@@ -2136,11 +2133,11 @@ async def get_task_week_summary(pool: Pool, task_id: int, tenant_id: int) -> dic
                   AND NOT u.is_deleted
             )
             SELECT
-                COALESCE(task_te_agg.complete, 0)::bigint AS complete,
-                COALESCE(task_credit_agg.credits, 0)::bigint AS credits,
+                COALESCE(task_te_agg.success_count, 0)::bigint AS success_count,
+                COALESCE(task_credit_agg.credits, 0)::bigint AS total_credits,
                 COALESCE(task_te_agg.runtime_h, 0)::float AS runtime_h,
                 COALESCE(task_te_agg.reach, 0)::bigint AS reach,
-                COALESCE(task_te_agg.comment, 0)::bigint AS comment,
+                COALESCE(task_te_agg.comments, 0)::bigint AS comments,
                 COALESCE(task_te_agg.likes, 0)::bigint AS likes,
                 COALESCE(task_te_agg.saves, 0)::bigint AS saves,
                 COALESCE(task_te_agg.dms, 0)::bigint AS dms,
@@ -2165,7 +2162,7 @@ async def get_task_week_summary(pool: Pool, task_id: int, tenant_id: int) -> dic
             task_te_agg AS (
                 SELECT
                     DATE_TRUNC('day', COALESCE(te.finished_at, te.started_at) AT TIME ZONE 'Asia/Shanghai') AS bucket,
-                    COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS complete
+                    COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success
                 FROM task_execution te
                 JOIN user_task ut ON ut.id = te.task_id
                 JOIN users u ON u.id = te.user_id
@@ -2178,7 +2175,7 @@ async def get_task_week_summary(pool: Pool, task_id: int, tenant_id: int) -> dic
                   AND NOT u.is_deleted
                 GROUP BY bucket
             )
-            SELECT d.bucket, COALESCE(a.complete, 0)::bigint AS complete
+            SELECT d.bucket, COALESCE(a.success, 0)::bigint AS success
             FROM date_buckets d
             LEFT JOIN task_te_agg a ON a.bucket = d.bucket
             ORDER BY d.bucket
@@ -2205,12 +2202,12 @@ async def get_task_week_summary(pool: Pool, task_id: int, tenant_id: int) -> dic
             "platforms": list(task_row["platforms"] or []),
         },
         "summary": {
-            "complete": int(summary.get("complete") or 0),
-            "credits": int(summary.get("credits") or 0),
+            "success_count": int(summary.get("success_count") or 0),
+            "total_credits": int(summary.get("total_credits") or 0),
             "runtime_h": round(float(summary.get("runtime_h") or 0), 1),
             "reach": int(summary.get("reach") or 0),
         },
-        "complete_series": [int(row["complete"] or 0) for row in series_rows],
+        "success": [int(row["success"] or 0) for row in series_rows],
     }
 
 

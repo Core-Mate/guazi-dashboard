@@ -78,43 +78,34 @@ function pickHighlightMetricValue(highlights: any, keys: string[], fieldName: st
 function applyMiniStats(mini: any, range?: string, highlights?: any) {
   if (!mini) return
   var successCur = pickMetricValue([
-    ['successCount', mini.successCount],
     ['success_count', mini.success_count],
   ])
   if (successCur == null) successCur = pickHighlightMetricValue(highlights, ['successcount'], 'value')
   var successPrev = pickMetricValue([
-    ['successCountPrev', mini.successCountPrev],
     ['success_count_prev', mini.success_count_prev],
   ])
   if (successPrev == null) successPrev = pickHighlightMetricValue(highlights, ['successcount'], 'prev')
-  var runtimeRaw = mini.runtime ?? mini.total_duration ?? mini.total_duration_hours ?? '0h'
-  var runtime = typeof runtimeRaw === 'number' ? Math.round(runtimeRaw) + 'h' : String(runtimeRaw)
-  var cost = mini.cost ?? mini.credits ?? mini.total_credits ?? 0
   var runtimeCurHours = pickHoursValue([
-    ['runtime_raw', mini.runtime_raw],
-    ['total_duration_hours', mini.total_duration_hours],
-    ['runtime_sec', mini.runtime_sec],
-    ['total_duration', mini.total_duration],
-    ['runtime', mini.runtime],
+    ['runtime_h', mini.runtime_h],
   ])
   var runtimePrevHours = pickHoursValue([
-    ['runtime_prev', mini.runtime_prev],
-    ['runtime_prev_sec', mini.runtime_prev_sec],
+    ['runtime_h_prev', mini.runtime_h_prev],
   ])
-  var costCur = pickMetricValue([
-    ['cost_raw', mini.cost_raw],
-    ['credits', mini.credits],
+  var runtime = (runtimeCurHours ?? 0).toFixed(1) + 'h'
+  var totalCredits = pickMetricValue([
     ['total_credits', mini.total_credits],
-    ['cost', mini.cost],
+  ]) ?? 0
+  var costCur = pickMetricValue([
+    ['total_credits', mini.total_credits],
   ])
   var costPrev = pickMetricValue([
-    ['cost_prev', mini.cost_prev],
+    ['total_credits_prev', mini.total_credits_prev],
   ])
-  applyMiniStatsRow(String(successCur ?? 0), runtime, String(cost))
+  applyMiniStatsRow(String(successCur ?? 0), runtime, String(totalCredits))
   // dashTab-ops stats card
   setText('statExec', String(successCur ?? 0))
   setText('statRuntime', runtime)
-  setText('statCost', String(cost))
+  setText('statCost', String(totalCredits))
   renderStatChange('statExecChange', successCur ?? 0, successPrev, range)
   renderStatChange('statRuntimeChange', runtimeCurHours ?? 0, runtimePrevHours, range)
   renderStatChange('statCostChange', costCur ?? 0, costPrev, range)

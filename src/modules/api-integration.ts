@@ -33,14 +33,22 @@ interface DashboardMiniStats {
   exec_prev?: number;
   success_count?: number;
   success_count_prev?: number;
-  runtime: number | string;
-  runtime_raw?: number;
-  runtime_prev?: number;
-  runtime_sec?: number;
-  runtime_prev_sec?: number;
-  cost: number | string;
-  cost_raw?: number;
-  cost_prev?: number;
+  runtime_h: number;
+  runtime_h_prev?: number;
+  total_credits: number;
+  total_credits_prev?: number;
+}
+
+export interface AccountTotals {
+  success_count: number;
+  total_credits: number;
+  runtime_h: number;
+  reach: number;
+}
+
+export interface SkillTotals {
+  success_count: number;
+  total_credits: number;
 }
 
 export interface DashboardSnapshot {
@@ -48,7 +56,8 @@ export interface DashboardSnapshot {
   achievements: { range: string; compare_label: string; achievements: any[] };
   aggs: {
     accounts: any[];
-    account_totals?: any;
+    account_totals?: AccountTotals;
+    skill_totals?: SkillTotals;
     skill_groups: any[];
     devices: any[];
     device_heat?: any[];
@@ -68,14 +77,13 @@ export interface DashboardSnapshot {
     success: any[];
     failed?: any[];
     total?: any[];
-    cost: any[];
-    credits?: number[];
+    credits: number[];
     reach: any[];
     comments: any[];
     likes: any[];
     saves: any[];
     dms: any[];
-    runtime: any[];
+    runtime_h: any[];
   };
   aggregations?: {
     accounts: any[];
@@ -99,7 +107,6 @@ var EMPTY_OPS_DATA = {
   reach: [],
   runtime: [],
   saves: [],
-  cost: [],
   credits: [],
 };
 
@@ -116,7 +123,8 @@ export const EMPTY_SNAPSHOT: DashboardSnapshot = {
   },
   aggs: {
     accounts: [],
-    account_totals: { success_count: 0 },
+    account_totals: { success_count: 0, total_credits: 0, runtime_h: 0, reach: 0 },
+    skill_totals: { success_count: 0, total_credits: 0 },
     skill_groups: [],
     devices: [],
     device_heat: [],
@@ -126,7 +134,7 @@ export const EMPTY_SNAPSHOT: DashboardSnapshot = {
   charts: {
     platform_breakdown: [],
     interaction_breakdown: [],
-    mini_stats: { exec: 0, success_count: 0, success_count_prev: 0, runtime: '', cost: 0 },
+    mini_stats: { exec: 0, success_count: 0, success_count_prev: 0, runtime_h: 0, total_credits: 0 },
     roi: { value: 0, cost: 0, roi: 0, saved: 0, saved_pct: 0, breakdown: [] },
   },
   ops_trend: {
@@ -136,14 +144,13 @@ export const EMPTY_SNAPSHOT: DashboardSnapshot = {
     success: [],
     failed: [],
     total: [],
-    cost: [],
     credits: [],
     reach: [],
     comments: [],
     likes: [],
     saves: [],
     dms: [],
-    runtime: [],
+    runtime_h: [],
   },
   aggregations: {
     accounts: [],
@@ -457,16 +464,16 @@ export interface AccountWeekSummary {
     platforms: string[];
   };
   summary: {
-    complete: number;
-    credits: number;
+    success_count: number;
+    total_credits: number;
     runtime_h: number;
     reach: number;
-    comment: number;
+    comments: number;
     likes: number;
     saves: number;
     dms: number;
   };
-  complete_series: number[];
+  success: number[];
 }
 
 export interface TaskWeekSummary {
@@ -478,12 +485,12 @@ export interface TaskWeekSummary {
     platforms: string[];
   };
   summary: {
-    complete: number;
-    credits: number;
+    success_count: number;
+    total_credits: number;
     runtime_h: number;
     reach: number;
   };
-  complete_series: number[];
+  success: number[];
 }
 
 export async function fetchAccountWeekSummary(accountId: string, tenantId: string): Promise<AccountWeekSummary> {
@@ -530,10 +537,8 @@ export async function tryLiveOpsData(range: string, custom?: { start: string; en
     var snapshotLikes = Array.isArray(snapshotTrend.likes) ? snapshotTrend.likes : [];
     var snapshotDms = Array.isArray(snapshotTrend.dms) ? snapshotTrend.dms : [];
     var snapshotReach = Array.isArray(snapshotTrend.reach) ? snapshotTrend.reach : [];
-    var snapshotRuntime = Array.isArray(snapshotTrend.runtime) ? snapshotTrend.runtime : [];
-    var snapshotCredits = Array.isArray(snapshotTrend.credits)
-      ? snapshotTrend.credits
-      : (Array.isArray(snapshotTrend.cost) ? snapshotTrend.cost : []);
+    var snapshotRuntime = Array.isArray(snapshotTrend.runtime_h) ? snapshotTrend.runtime_h : [];
+    var snapshotCredits = Array.isArray(snapshotTrend.credits) ? snapshotTrend.credits : [];
     if (
       snapshotLabels.length
       || snapshotDates.length
@@ -584,7 +589,7 @@ export async function tryLiveOpsData(range: string, custom?: { start: string; en
   var likes = trend.likes && trend.likes.length ? trend.likes : [];
   var dms = trend.dms && trend.dms.length ? trend.dms : [];
   var reach = trend.reach && trend.reach.length ? trend.reach : [];
-  var runtime = trend.runtime && trend.runtime.length ? trend.runtime : [];
+  var runtime = trend.runtime_h && trend.runtime_h.length ? trend.runtime_h : [];
   var credits = trend.credits && trend.credits.length ? trend.credits : [];
 
   return {
@@ -656,13 +661,14 @@ export async function tryLiveAccounts() {
 
   accountList.length = 0;
   data.forEach(function(a) {
+    var runtimeH = Number(a.runtime_h || 0)
     accountList.push({
       id: 'user-' + a.id,
       name: a.username || '未知',
       deviceId: '',
       tokenUsed: Math.round(a.total_credits || 0),
       successCount: a.success_count ?? 0,
-      successDuration: typeof a.duration === 'number' ? fmtHM(a.duration) : (a.duration || '0:00'),
+      successDuration: fmtHM(Math.round(runtimeH * 3600)),
       comments: 0,
       likes: 0,
       saves: 0,

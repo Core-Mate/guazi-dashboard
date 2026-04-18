@@ -1,4 +1,5 @@
 import { heatPlatforms, deviceHeat, deviceList, deviceMetrics } from '../data/devices'
+import { fmtHM } from '../data/helpers'
 import { downloadCSV } from './export-utils'
 
 var deviceSearchQuery = '';
@@ -161,14 +162,14 @@ export function renderDevicesFromAggs(devices: any[], heat: any[]) {
       accountId: device.account_id || '',
     })
     deviceMetrics[id] = {
-      tokenUsage: toNumber(device.tokenUsage ?? device.token_usage ?? device.total_credits ?? device.cost),
-      successCount: toNumber(device.successCount ?? device.success_count),
-      successDuration: device.successDuration || device.success_duration || device.duration || '0h',
+      tokenUsage: toNumber(device.total_credits),
+      successCount: toNumber(device.success_count),
+      successDuration: fmtHM(Math.round(toNumber(device.runtime_h) * 3600)),
       comments: toNumber(device.comments),
       likes: toNumber(device.likes),
       saves: toNumber(device.saves ?? device.favorites),
       dms: toNumber(device.dms ?? device.private_messages),
-      reach: toNumber(device.reach ?? device.unique_reach),
+      reach: toNumber(device.reach),
       status: device.status || 'online',
       operator: device.operator || device.owner || '',
     }

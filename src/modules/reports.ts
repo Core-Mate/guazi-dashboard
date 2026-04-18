@@ -541,7 +541,7 @@ async function buildReportHTML(dim) {
     ? snap.charts.interaction_breakdown
     : fallbackInteractionData;
   var miniStats = snap && snap.charts && snap.charts.mini_stats ? snap.charts.mini_stats : {};
-  var accountTotals = snap && ((snap as any).account_totals || (snap.aggs && snap.aggs.account_totals)) ? ((snap as any).account_totals || snap.aggs.account_totals) : {};
+  var accountTotals = snap && snap.aggs && snap.aggs.account_totals ? snap.aggs.account_totals : {};
 
   var execCard = findByKey(highlightCards, 'successCount') || findCard(highlightCards, ['successcount'], false);
   var runtimeCard = findCard(highlightCards, ['runtime', 'duration', 'hours', '时长'], false);
@@ -552,23 +552,23 @@ async function buildReportHTML(dim) {
   if (!trendCard) trendCard = findCard(highlightCards, ['reach', 'impression', '触达'], true);
   if (!trendCard) trendCard = findCard(highlightCards, [], true);
 
-  var execValue = miniStats && (miniStats.successCount ?? miniStats.success_count);
+  var execValue = miniStats && miniStats.success_count;
   if (execValue == null) execValue = execCard && execCard.value;
-  if (execValue == null) execValue = accountTotals && (accountTotals.successCount ?? accountTotals.success_count);
+  if (execValue == null) execValue = accountTotals && accountTotals.success_count;
 
-  var runtimeValue = miniStats && (miniStats.runtime ?? miniStats.total_duration ?? miniStats.total_duration_hours);
+  var runtimeValue = miniStats && miniStats.runtime_h;
   if (runtimeValue == null) runtimeValue = runtimeCard && runtimeCard.value;
   if (runtimeValue == null && fallbackTrendData && fallbackTrendData.statRuntime) runtimeValue = fallbackTrendData.statRuntime;
 
-  var costValue = miniStats && (miniStats.cost ?? miniStats.credits ?? miniStats.token_used);
+  var costValue = miniStats && miniStats.total_credits;
   if (costValue == null) costValue = costCard && costCard.value;
-  if (costValue == null) costValue = accountTotals && (accountTotals.token_used ?? accountTotals.credits);
+  if (costValue == null) costValue = accountTotals && accountTotals.total_credits;
 
-  var execPrev = miniStats && (miniStats.successCountPrev ?? miniStats.success_count_prev);
+  var execPrev = miniStats && miniStats.success_count_prev;
   if (execPrev == null) execPrev = execCard ? asNumber(execCard.prev) : null;
-  var runtimePrev = miniStats && (miniStats.runtimePrev ?? miniStats.runtime_prev);
+  var runtimePrev = miniStats && miniStats.runtime_h_prev;
   if (runtimePrev == null) runtimePrev = runtimeCard ? asNumber(runtimeCard.prev) : null;
-  var costPrev = miniStats && (miniStats.costPrev ?? miniStats.cost_prev);
+  var costPrev = miniStats && miniStats.total_credits_prev;
   if (costPrev == null) costPrev = costCard ? asNumber(costCard.prev) : null;
 
   var trendLabels = trendCard && trendCard.series && safeArray(trendCard.series.labels).length

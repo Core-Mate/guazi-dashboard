@@ -198,8 +198,8 @@ function renderTaskDetailSummary(row: HTMLElement, data: TaskWeekSummary) {
   var caption = card.querySelector('.task-detail-caption') as HTMLElement | null
   if (metrics) {
     metrics.innerHTML =
-      '<div class="metric"><span class="v">' + formatTaskMetricValue(num(data.summary && data.summary.complete)) + '</span><span class="k">完成</span></div>' +
-      '<div class="metric"><span class="v">' + formatTaskMetricValue(num(data.summary && data.summary.credits)) + '</span><span class="k">算力豆</span></div>' +
+      '<div class="metric"><span class="v">' + formatTaskMetricValue(num(data.summary && data.summary.success_count)) + '</span><span class="k">完成</span></div>' +
+      '<div class="metric"><span class="v">' + formatTaskMetricValue(num(data.summary && data.summary.total_credits)) + '</span><span class="k">算力豆</span></div>' +
       '<div class="metric"><span class="v">' + formatTaskRuntimeHours(data.summary && data.summary.runtime_h) + '</span><span class="k">时长</span></div>' +
       '<div class="metric"><span class="v">' + formatTaskMetricValue(num(data.summary && data.summary.reach)) + '</span><span class="k">触达</span></div>'
   }
@@ -210,7 +210,7 @@ function renderTaskDetailSummary(row: HTMLElement, data: TaskWeekSummary) {
   if (spark) {
     requestAnimationFrame(function() {
       if (taskDetailRow !== row || taskDetailRowId !== String(data.task_info && data.task_info.id || '')) return
-      drawSparkline(spark, Array.isArray(data.complete_series) ? data.complete_series : [], '#2563eb')
+      drawSparkline(spark, Array.isArray(data.success) ? data.success : [], '#2563eb')
     })
   }
 }
@@ -421,9 +421,15 @@ function getScenarioGroupKey(group: any) {
 
 function getScenarioGroupSuccessCount(group: any) {
   return num(group && (
-    group.successCount ??
     group.success_count ??
-    (group.totals && (group.totals.successCount ?? group.totals.success_count))
+    (group.totals && group.totals.success_count)
+  ))
+}
+
+function getScenarioGroupTotalCredits(group: any) {
+  return num(group && (
+    group.total_credits ??
+    (group.totals && group.totals.total_credits)
   ))
 }
 
@@ -523,7 +529,7 @@ export function renderScenarioCards() {
           <div class="scenario-card-metrics">
             <span>技能数: <strong>${rows.length}</strong></span>
             <span>完成: <strong>${totalSuccess}</strong></span>
-            <span>算力豆: <strong>${rows.reduce((a,r) => a + getScenarioCredits(r), 0)}</strong></span>
+            <span>算力豆: <strong>${getScenarioGroupTotalCredits(g)}</strong></span>
           </div>
           <span class="scenario-chevron open" id="chev-${g.id}">▾</span>
         </div>
@@ -583,7 +589,7 @@ export function renderScenarioCardsFull(containerId?: string, idPrefix?: string)
       '<div class="scenario-card-header" onclick="toggleScenarioFull(\''+togglePrefix+g.id+'\')">' +
         '<div class="scenario-card-title"><span class="scenario-icon">'+g.icon+'</span>'+g.name+'</div>' +
         '<div style="display:flex;align-items:center;gap:12px;">' +
-          '<div class="scenario-card-metrics"><span>技能数: <strong>'+rows.length+'</strong></span><span>完成: <strong>'+totalSuccess+'</strong></span><span>算力豆: <strong>'+rows.reduce((a,r) => a + getScenarioCredits(r), 0)+'</strong></span></div>' +
+          '<div class="scenario-card-metrics"><span>技能数: <strong>'+rows.length+'</strong></span><span>完成: <strong>'+totalSuccess+'</strong></span><span>算力豆: <strong>'+getScenarioGroupTotalCredits(g)+'</strong></span></div>' +
           '<span class="scenario-chevron open" id="'+chevPrefix+'-'+g.id+'">&#9662;</span>' +
         '</div>' +
       '</div>' +
@@ -711,11 +717,9 @@ function getGroupItems(group: any) {
 
 function mapSkillItems(items: any[], meta: any) {
   return items.map(function(item, index) {
-    var success = num(item.success_count ?? item.success ?? item.completed)
-    var credits = num(item.total_credits ?? item.totalCredits ?? item.token_avg ?? 0)
-    var tokenAvg = num(item.tokenAvg ?? item.token_avg ?? item.avg_cost ?? item.credits_avg)
-    var totalCredits = num(item.totalCredits ?? item.total_credits ?? item.token_total ?? credits ?? tokenAvg * success)
-    var durationSec = num(item.duration_sec ?? item.durationSec ?? item.total_duration_sec ?? item.avg_duration_sec)
+    var success = num(item.success_count)
+    var credits = num(item.total_credits)
+    var durationSec = Math.round(num(item.runtime_h) * 3600)
     var taskId = item.skill_id ?? item.task_id ?? item.id ?? ''
     var skillLabel = String(item.skill_name ?? item.task_name ?? item.name ?? item.label ?? 'task').trim() || 'task'
     var skillFallback = skillLabel.replace(/\s+/g, '-').slice(0, 12) + '-' + (index + 1)
@@ -728,18 +732,17 @@ function mapSkillItems(items: any[], meta: any) {
       exec: num(item.exec ?? item.executions ?? item.total_executions ?? success),
       success: success,
       fail: num(item.fail ?? item.fail_count),
-      avgDur: item.duration_sec != null ? fmtHM(item.duration_sec) : (item.avgDur || item.avg_duration || '—'),
+      avgDur: fmtHM(durationSec),
       durationSec: durationSec,
-      tokenAvg: tokenAvg,
       credits: credits,
-      totalCredits: totalCredits,
+      totalCredits: credits,
       comments: num(item.comments ?? item.collected ?? item.records),
       likes: num(item.likes ?? item.opens),
       saves: num(item.saves ?? item.favorites ?? item.bookmarks),
       favorites: num(item.favorites ?? item.saves ?? item.bookmarks),
       dms: num(item.dms ?? item.private_messages ?? item.leads),
       profileViews: num(item.profileViews ?? item.profile_views),
-      uniqueReach: num(item.uniqueReach ?? item.reach ?? item.touchpoints),
+      uniqueReach: num(item.reach),
     }
   })
 }
@@ -802,7 +805,8 @@ export function renderSkillGroupsFromAggs(groups: any[]) {
       color: group.color || '#6366f1',
       extraCols: meta.extraCols,
       extraFn: meta.extraFn,
-      successCount: getScenarioGroupSuccessCount(group),
+      success_count: getScenarioGroupSuccessCount(group),
+      total_credits: getScenarioGroupTotalCredits(group),
     })
     enabledScenarios.push(meta.id)
     skillData[meta.id] = mapSkillItems(items, meta)

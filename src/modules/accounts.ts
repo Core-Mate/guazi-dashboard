@@ -9,6 +9,7 @@ import { getContentClampBounds, smoothToggleCollapse } from './utils'
 var accountSortState: { col: string; dir: 'asc' | 'desc' } = { col: '', dir: 'asc' }
 var accountSearchQuery = '';
 var accountSummarySuccessCount = 0;
+var accountSummaryTotalCredits = 0;
 var accountHoverCardEl: HTMLElement | null = null
 var accountHoverRow: HTMLElement | null = null
 var accountHoverRowId = ''
@@ -190,8 +191,8 @@ function renderAccountHoverSummary(row: HTMLElement, data: AccountWeekSummary) {
   var caption = card.querySelector('.account-hover-caption') as HTMLElement | null
   if (metrics) {
     metrics.innerHTML =
-      '<div class="metric"><span class="v">' + formatMetricValue(toNumber(data.summary && data.summary.complete)) + '</span><span class="k">完成</span></div>' +
-      '<div class="metric"><span class="v">' + formatMetricValue(toNumber(data.summary && data.summary.credits)) + '</span><span class="k">算力豆</span></div>' +
+      '<div class="metric"><span class="v">' + formatMetricValue(toNumber(data.summary && data.summary.success_count)) + '</span><span class="k">完成</span></div>' +
+      '<div class="metric"><span class="v">' + formatMetricValue(toNumber(data.summary && data.summary.total_credits)) + '</span><span class="k">算力豆</span></div>' +
       '<div class="metric"><span class="v">' + formatRuntimeHours(data.summary && data.summary.runtime_h) + '</span><span class="k">时长</span></div>' +
       '<div class="metric"><span class="v">' + formatMetricValue(toNumber(data.summary && data.summary.reach)) + '</span><span class="k">触达</span></div>'
   }
@@ -204,7 +205,7 @@ function renderAccountHoverSummary(row: HTMLElement, data: AccountWeekSummary) {
   if (spark) {
     requestAnimationFrame(function() {
       if (accountHoverRow !== row || accountHoverRowId !== String(data.account && data.account.id || '')) return
-      drawSparkline(spark, Array.isArray(data.complete_series) ? data.complete_series : [], '#2563eb')
+      drawSparkline(spark, Array.isArray(data.success) ? data.success : [], '#2563eb')
     })
   }
 }
@@ -367,7 +368,6 @@ export function renderAccountAcquireGroup() {
   }
   filtered = sortAccounts(filtered);
   var totalAccounts = filtered.length;
-  var totalCredits = filtered.reduce(function(a, x) { return a + (x.tokenUsed || 0); }, 0);
   var tableRows = filtered.length ? filtered.map(function(acc) {
     function displayVal(v) { return v > 0 ? v.toLocaleString() : '<span class="text-na">暂无</span>'; }
     return '<tr data-account-id="' + String(acc.id || '') + '">' +
@@ -390,7 +390,7 @@ export function renderAccountAcquireGroup() {
           '<div class="scenario-card-metrics">' +
             '<span>账号: <strong>' + totalAccounts + '</strong></span>' +
             '<span>完成: <strong>' + accountSummarySuccessCount.toLocaleString() + '</strong></span>' +
-            '<span>算力豆: <strong>' + totalCredits.toLocaleString() + '</strong></span>' +
+            '<span>算力豆: <strong>' + accountSummaryTotalCredits.toLocaleString() + '</strong></span>' +
           '</div>' +
           '<span class="scenario-chevron open" id="chevAccountAcquire">&#9662;</span>' +
         '</div>' +
@@ -431,19 +431,18 @@ export function renderAccountsFromAggs(accounts: any[], totals: any) {
   if (!Array.isArray(accounts)) return
   accountList.length = 0
   accounts.forEach(function(account, index) {
-    var durationSec = toNumber(account.duration_sec ?? account.durationSec ?? account.total_duration_sec ?? account.avg_duration_sec)
+    var runtimeH = toNumber(account.runtime_h)
+    var durationSec = Math.round(runtimeH * 3600)
     var favorites = toNumber(account.favorites ?? account.saves)
-    var uniqueReach = toNumber(account.uniqueReach ?? account.unique_reach ?? account.reach)
-    var successDuration = account.duration_sec != null
-      ? fmtHM(account.duration_sec)
-      : (account.successDuration || account.success_duration || account.duration || '0h')
+    var uniqueReach = toNumber(account.reach)
+    var successDuration = fmtHM(durationSec)
     accountList.push({
       id: account.id || account.account_id || 'account-' + (index + 1),
       name: account.name || account.username || account.label || ('账号 ' + (index + 1)),
       role: account.role || '',
       deviceId: account.deviceId || account.device_id || account.device_label || '',
-      tokenUsed: toNumber(account.tokenUsed ?? account.token_used ?? account.total_credits ?? account.cost),
-      successCount: toNumber(account.successCount ?? account.success_count),
+      tokenUsed: toNumber(account.total_credits),
+      successCount: toNumber(account.success_count),
       durationSec: durationSec,
       successDuration: successDuration,
       comments: toNumber(account.comments ?? account.comment_count),
@@ -455,7 +454,8 @@ export function renderAccountsFromAggs(accounts: any[], totals: any) {
       reach: uniqueReach,
     })
   })
-  accountSummarySuccessCount = toNumber(totals && (totals.successCount ?? totals.success_count))
+  accountSummarySuccessCount = toNumber(totals && totals.success_count)
+  accountSummaryTotalCredits = toNumber(totals && totals.total_credits)
   renderAccountAcquireGroup()
 }
 

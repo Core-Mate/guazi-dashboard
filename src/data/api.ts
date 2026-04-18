@@ -17,8 +17,8 @@ export interface OverviewData {
   total_executions: number;
   success_count: number;
   fail_count: number;
-  total_credits_consumed: number;
-  total_duration_hours: number;
+  total_credits: number;
+  runtime_h: number;
   active_users: number;
 }
 
@@ -32,7 +32,7 @@ export interface TrendData {
   saves: number[];
   dms: number[];
   reach: number[];
-  runtime: number[];
+  runtime_h: number[];
   credits: number[];
 }
 
@@ -127,8 +127,7 @@ export interface AccountData {
   username: string;
   exec_count: number;
   success_count?: number;
-  duration_hours: number;
-  duration: string;
+  runtime_h: number;
   total_credits: number;
 }
 

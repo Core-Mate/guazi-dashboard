@@ -18,7 +18,6 @@ function emptyOpsTrend(): any {
     reach: [],
     runtime: [],
     saves: [],
-    cost: [],
     credits: [],
   }
 }
@@ -61,10 +60,9 @@ function triggerSnapshotBoot(range: string, custom?: { start: string; end: strin
           likes: Array.isArray(snap.ops_trend.likes) ? snap.ops_trend.likes : [],
           dms: Array.isArray(snap.ops_trend.dms) ? snap.ops_trend.dms : [],
           reach: Array.isArray(snap.ops_trend.reach) ? snap.ops_trend.reach : [],
-          runtime: Array.isArray(snap.ops_trend.runtime) ? snap.ops_trend.runtime : [],
+          runtime: Array.isArray(snap.ops_trend.runtime_h) ? snap.ops_trend.runtime_h : [],
           saves: Array.isArray(snap.ops_trend.saves) ? snap.ops_trend.saves : [],
-          cost: Array.isArray(snap.ops_trend.cost) ? snap.ops_trend.cost : [],
-          credits: Array.isArray(snap.ops_trend.cost) ? snap.ops_trend.cost : [],
+          credits: Array.isArray(snap.ops_trend.credits) ? snap.ops_trend.credits : [],
         }
       : emptyOpsTrend()
     updateCharts(range, trend)
