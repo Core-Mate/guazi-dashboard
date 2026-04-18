@@ -88,6 +88,7 @@ export interface DashboardSnapshot {
 var SNAPSHOT_CACHE_TTL = 30000;
 var snapshotCache: Record<string, { expiresAt: number; data?: DashboardSnapshot; pending?: Promise<DashboardSnapshot> }> = {};
 var EMPTY_OPS_DATA = {
+  labels: [],
   dates: [],
   success: [],
   failed: [],
@@ -478,6 +479,55 @@ export async function tryLiveHighlights(range: string) {
 }
 
 export async function tryLiveOpsData(range: string, custom?: { start: string; end: string }) {
+  var snap = await fetchDashboardData(range, custom);
+  var snapshotTrend = snap && snap.ops_trend;
+  if (snapshotTrend) {
+    var snapshotLabels = Array.isArray(snapshotTrend.labels) ? snapshotTrend.labels : [];
+    var snapshotDates = Array.isArray(snapshotTrend.dates) && snapshotTrend.dates.length
+      ? snapshotTrend.dates
+      : snapshotLabels;
+    var snapshotSuccess = Array.isArray(snapshotTrend.success) ? snapshotTrend.success : [];
+    var snapshotFailed = Array.isArray(snapshotTrend.failed) ? snapshotTrend.failed : [];
+    var snapshotTotal = Array.isArray(snapshotTrend.total)
+      ? snapshotTrend.total
+      : (Array.isArray(snapshotTrend.exec) ? snapshotTrend.exec : []);
+    var snapshotComments = Array.isArray(snapshotTrend.comments) ? snapshotTrend.comments : [];
+    var snapshotLikes = Array.isArray(snapshotTrend.likes) ? snapshotTrend.likes : [];
+    var snapshotDms = Array.isArray(snapshotTrend.dms) ? snapshotTrend.dms : [];
+    var snapshotReach = Array.isArray(snapshotTrend.reach) ? snapshotTrend.reach : [];
+    var snapshotRuntime = Array.isArray(snapshotTrend.runtime) ? snapshotTrend.runtime : [];
+    var snapshotCredits = Array.isArray(snapshotTrend.credits)
+      ? snapshotTrend.credits
+      : (Array.isArray(snapshotTrend.cost) ? snapshotTrend.cost : []);
+    if (
+      snapshotLabels.length
+      || snapshotDates.length
+      || snapshotSuccess.length
+      || snapshotFailed.length
+      || snapshotTotal.length
+      || snapshotComments.length
+      || snapshotLikes.length
+      || snapshotDms.length
+      || snapshotReach.length
+      || snapshotRuntime.length
+      || snapshotCredits.length
+    ) {
+      return {
+        labels: snapshotLabels,
+        dates: snapshotDates,
+        success: snapshotSuccess,
+        failed: snapshotFailed,
+        total: snapshotTotal,
+        comments: snapshotComments,
+        likes: snapshotLikes,
+        dms: snapshotDms,
+        reach: snapshotReach,
+        credits: snapshotCredits,
+        runtime: snapshotRuntime,
+      };
+    }
+  }
+
   var days = rangeToDays(range);
   if (range === 'custom' && custom) {
     var start = new Date(custom.start);
@@ -503,6 +553,7 @@ export async function tryLiveOpsData(range: string, custom?: { start: string; en
   var credits = trend.credits && trend.credits.length ? trend.credits : [];
 
   return {
+    labels: dates,
     dates: dates,
     success: success,
     failed: failed,

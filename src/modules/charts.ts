@@ -71,6 +71,7 @@ function escapeHtml(value) {
 
 function formatTrendLabel(value) {
   if (typeof value !== 'string') return String(value || '');
+  if (/^\d{2}:\d{2}$/.test(value) || /^\d{1,2}\/\d{1,2}$/.test(value)) return value;
   return value.length > 10
     ? value.substring(11, 13) + ':00'
     : value.slice(5).replace('-', '/');
@@ -105,8 +106,11 @@ function getOpsChartData(range, opsData?): any {
     trendDesc: '',
   };
   var liveSource = opsData || lastOpsData;
-  var labels = liveSource && Array.isArray(liveSource.dates) && liveSource.dates.length
-    ? liveSource.dates.map(formatTrendLabel)
+  var labelSource = liveSource && Array.isArray(liveSource.labels) && liveSource.labels.length
+    ? liveSource.labels
+    : (liveSource && Array.isArray(liveSource.dates) && liveSource.dates.length ? liveSource.dates : []);
+  var labels = labelSource.length
+    ? labelSource.map(formatTrendLabel)
     : (emptySource.labels || []);
   return Object.assign({}, emptySource, {
     labels: labels,
