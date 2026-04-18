@@ -17,6 +17,8 @@ export var oplogSortDir: 'asc' | 'desc' = 'desc'
 let oplogState = { items: [] as any[], total: 0, loaded: false }
 let transactionState = { items: [] as any[], total: 0, loaded: false }
 let overviewOplogLimit = 5
+let _oplogLoaded = false
+let _transactionsLoaded = false
 
 function compareRecordText(a, b) {
   return String(a || '').localeCompare(String(b || ''), 'zh-CN')
@@ -455,10 +457,19 @@ export function switchRecordTab(tab, btn) {
   btn.classList.add('active')
   var el = document.getElementById('recordTab-' + tab)
   if (el) { el.classList.add('active', 'tab-slide-in'); setTimeout(function() { el.classList.remove('tab-slide-in') }, 250) }
+  if (tab === 'oplog') {
+    if (_oplogLoaded) return
+    return renderOplog(1, 20)
+  }
+  if (tab === 'transactions') {
+    if (_transactionsLoaded) return
+    return renderTransactions(1, 20)
+  }
   renderRecordTab(tab)
 }
 
 export async function renderTransactions(page, pageSize) {
+  _transactionsLoaded = false
   ensureMemberFilter()
   renderDateFilter('transactions')
   var body = document.getElementById('transactions-tbody')
@@ -482,6 +493,7 @@ export async function renderTransactions(page, pageSize) {
   try {
     var data = await fetchTransactions(state.page, state.pageSize)
     applyTransactionState(data)
+    _transactionsLoaded = true
     var totalPages = Math.max(1, Math.ceil(Math.max(transactionState.total, 1) / state.pageSize))
     if (state.page > totalPages) {
       state.page = totalPages
@@ -496,6 +508,7 @@ export async function renderTransactions(page, pageSize) {
 }
 
 export async function renderOplog(page, pageSize) {
+  _oplogLoaded = false
   renderDateFilter('oplog')
   var body = document.getElementById('oplog-tbody')
   var state = paginationState.oplog
@@ -518,6 +531,7 @@ export async function renderOplog(page, pageSize) {
   try {
     var data = await fetchAuditLog(state.page, state.pageSize)
     applyOplogState(data)
+    _oplogLoaded = true
     var totalPages = Math.max(1, Math.ceil(Math.max(oplogState.total, 1) / state.pageSize))
     if (state.page > totalPages) {
       state.page = totalPages

@@ -212,8 +212,6 @@ document.addEventListener('DOMContentLoaded', async function() {
   renderAccountMetricsTable();
   updateDeviceBadge();
   initFilters();
-  renderTransactions(1, 20);
-  renderOplog(1, 20);
   renderMembers();
   var memberSearch = document.getElementById('entMemberSearch');
   if (memberSearch) {
