@@ -1526,3 +1526,34 @@ tbody tr:hover,
 .task-detail-spark { width: 100%; height: 48px; }
 .account-hover-caption,
 .task-detail-caption { font-size: 11px; color: var(--color-text-3); text-align: right; }
+
+/* 表格 loading（复用 globalLoader spinner 动画） */
+.table-loader-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(2px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  z-index: 5;
+  pointer-events: none;
+}
+.table-loader-overlay .loader-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid rgba(0, 0, 0, 0.1);
+  border-top-color: var(--accent-default, #3b82f6);
+  border-radius: 50%;
+  animation: globalLoaderSpin 0.9s linear infinite;
+}
+.table-loader-overlay .loader-text {
+  font-size: 13px;
+  color: var(--color-text-2, #475569);
+}
+
+.table-wrap {
+  position: relative;
+}

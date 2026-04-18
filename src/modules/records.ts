@@ -463,14 +463,20 @@ export async function renderTransactions(page, pageSize) {
   renderDateFilter('transactions')
   var body = document.getElementById('transactions-tbody')
   var state = paginationState.transactions
-  var showTimer: ReturnType<typeof setTimeout> | null = null
   if (!body) {
     syncRecordSortHeaders('transactions', txSortKey, txSortDir)
     return
   }
+  var wrap = body.closest('.table-wrap')
+  var overlay: HTMLElement | null = null
   if (typeof page === 'number') state.page = page
   if (typeof pageSize === 'number') state.pageSize = pageSize
-  showTimer = setTimeout(function() {
+  var showTimer = setTimeout(function() {
+    if (!wrap) return
+    overlay = document.createElement('div')
+    overlay.className = 'table-loader-overlay'
+    overlay.innerHTML = '<div class="loader-spinner"></div><div class="loader-text">加载中...</div>'
+    wrap.appendChild(overlay)
     body.classList.add('is-loading')
   }, 150)
   try {
@@ -483,7 +489,8 @@ export async function renderTransactions(page, pageSize) {
     }
     paintTransactions()
   } finally {
-    if (showTimer) clearTimeout(showTimer)
+    clearTimeout(showTimer)
+    if (overlay) overlay.remove()
     body.classList.remove('is-loading')
   }
 }
@@ -492,14 +499,20 @@ export async function renderOplog(page, pageSize) {
   renderDateFilter('oplog')
   var body = document.getElementById('oplog-tbody')
   var state = paginationState.oplog
-  var showTimer: ReturnType<typeof setTimeout> | null = null
   if (!body) {
     syncRecordSortHeaders('oplog', oplogSortKey, oplogSortDir)
     return
   }
+  var wrap = body.closest('.table-wrap')
+  var overlay: HTMLElement | null = null
   if (typeof page === 'number') state.page = page
   if (typeof pageSize === 'number') state.pageSize = pageSize
-  showTimer = setTimeout(function() {
+  var showTimer = setTimeout(function() {
+    if (!wrap) return
+    overlay = document.createElement('div')
+    overlay.className = 'table-loader-overlay'
+    overlay.innerHTML = '<div class="loader-spinner"></div><div class="loader-text">加载中...</div>'
+    wrap.appendChild(overlay)
     body.classList.add('is-loading')
   }, 150)
   try {
@@ -512,7 +525,8 @@ export async function renderOplog(page, pageSize) {
     }
     paintOplog()
   } finally {
-    if (showTimer) clearTimeout(showTimer)
+    clearTimeout(showTimer)
+    if (overlay) overlay.remove()
     body.classList.remove('is-loading')
   }
 }
