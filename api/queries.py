@@ -1576,36 +1576,45 @@ async def stats_credits(pool: Pool, days: int, tenant_id: int) -> dict[str, list
 async def stats_tasks(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
     rows = await pool.fetch(
         f"""
-        SELECT
-            ut.task_name,
-            ut.category,
-            ut.related_platforms,
-            COALESCE(exec_stats.total_executions, 0)::bigint AS total_executions,
-            COALESCE(exec_stats.success_count, 0)::bigint AS success_count,
-            COALESCE(exec_stats.fail_count, 0)::bigint AS fail_count
-        FROM user_task AS ut
-        LEFT JOIN (
+        WITH tenant_users AS (
+            SELECT id
+            FROM users
+            WHERE tenant_id = $1
+              AND NOT is_deleted
+        ),
+        tenant_tasks AS (
+            SELECT
+                ut.id,
+                ut.task_name,
+                ut.category,
+                ut.related_platforms
+            FROM user_task AS ut
+            JOIN tenant_users tu ON tu.id = ut.user_id
+            WHERE NOT ut.is_deleted
+        ),
+        exec_stats AS (
             SELECT
                 te.task_id,
                 COUNT(*)::bigint AS total_executions,
                 COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success_count,
                 COUNT(*) FILTER (WHERE te.execution_result = 'FAILED')::bigint AS fail_count
             FROM task_execution te
-            JOIN users u ON u.id = te.user_id
-            WHERE u.tenant_id = $1
-              AND NOT te.is_deleted
-              AND NOT u.is_deleted
+            JOIN tenant_users tu ON tu.id = te.user_id
+            JOIN tenant_tasks tt ON tt.id = te.task_id
+            WHERE NOT te.is_deleted
             GROUP BY te.task_id
-        ) AS exec_stats
-            ON exec_stats.task_id = ut.id
-        WHERE NOT ut.is_deleted
-          AND ut.user_id IN (
-              SELECT id
-              FROM users
-              WHERE tenant_id = $1
-                AND NOT is_deleted
-          )
-        ORDER BY total_executions DESC, ut.task_name
+        )
+        SELECT
+            tt.task_name,
+            tt.category,
+            tt.related_platforms,
+            COALESCE(exec_stats.total_executions, 0)::bigint AS total_executions,
+            COALESCE(exec_stats.success_count, 0)::bigint AS success_count,
+            COALESCE(exec_stats.fail_count, 0)::bigint AS fail_count
+        FROM tenant_tasks tt
+        LEFT JOIN exec_stats
+            ON exec_stats.task_id = tt.id
+        ORDER BY total_executions DESC, tt.task_name
         LIMIT 50
         """,
         tenant_id,
@@ -1627,24 +1636,46 @@ async def stats_tasks(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
 async def get_members(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
     rows = await pool.fetch(
         """
-        SELECT u.id, u.name AS username, u."phoneNumber" AS phone, u.role,
-               COALESCE(ub.remaining, 0)::float AS balance,
-               u."createdAt" AS join_date,
-               COALESCE(es.exec_count, 0)::bigint AS exec_count,
-               COALESCE(es.total_tokens, 0)::bigint AS total_tokens
-        FROM users u
-        LEFT JOIN user_balance ub ON u.id = ub.user_id
-        LEFT JOIN (
-            SELECT user_id, COUNT(*) AS exec_count,
-                   COALESCE(SUM(
-                       CASE WHEN token_usage IS NOT NULL
-                            THEN ((token_usage #>> '{}')::jsonb ->> 'total_tokens')::bigint
-                            ELSE 0 END
-                   ), 0) AS total_tokens
-            FROM task_execution GROUP BY user_id
-        ) es ON u.id = es.user_id
-        WHERE NOT u.is_deleted AND u.tenant_id = $1
-        ORDER BY u."createdAt"
+        WITH tenant_users AS (
+            SELECT
+                u.id,
+                u.name AS username,
+                u."phoneNumber" AS phone,
+                u.role,
+                u."createdAt" AS join_date
+            FROM users u
+            WHERE NOT u.is_deleted
+              AND u.tenant_id = $1
+        ),
+        execution_stats AS (
+            SELECT
+                te.user_id,
+                COUNT(*)::bigint AS exec_count,
+                COALESCE(SUM(
+                    CASE
+                        WHEN te.token_usage IS NOT NULL
+                        THEN ((te.token_usage #>> '{}')::jsonb ->> 'total_tokens')::bigint
+                        ELSE 0
+                    END
+                ), 0)::bigint AS total_tokens
+            FROM task_execution te
+            JOIN tenant_users tu ON tu.id = te.user_id
+            WHERE NOT te.is_deleted
+            GROUP BY te.user_id
+        )
+        SELECT
+            tu.id,
+            tu.username,
+            tu.phone,
+            tu.role,
+            COALESCE(ub.remaining, 0)::float AS balance,
+            tu.join_date,
+            COALESCE(es.exec_count, 0)::bigint AS exec_count,
+            COALESCE(es.total_tokens, 0)::bigint AS total_tokens
+        FROM tenant_users tu
+        LEFT JOIN user_balance ub ON tu.id = ub.user_id
+        LEFT JOIN execution_stats es ON tu.id = es.user_id
+        ORDER BY tu.join_date
         """,
         tenant_id,
     )
@@ -1658,129 +1689,156 @@ async def get_members(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
 
 
 async def get_wallet(pool: Pool, tenant_id: int) -> dict[str, Any]:
-    balance_row = await pool.fetchrow(
+    totals_row = await pool.fetchrow(
         """
-        SELECT COALESCE(SUM(ub.remaining), 0)::float AS total_balance
-        FROM user_balance ub
-        JOIN users u ON u.id = ub.user_id
-        WHERE u.tenant_id = $1 AND NOT u.is_deleted
+        WITH tenant_users AS (
+            SELECT id
+            FROM users
+            WHERE tenant_id = $1
+              AND NOT is_deleted
+        ),
+        balance_totals AS (
+            SELECT COALESCE(SUM(ub.remaining), 0)::float AS total_balance
+            FROM user_balance ub
+            JOIN tenant_users tu ON tu.id = ub.user_id
+        ),
+        credit_totals AS (
+            SELECT
+                COALESCE(SUM(cf.change_amount) FILTER (WHERE cf.change_type = 'RECHARGE'), 0)::float AS total_recharged,
+                COALESCE(SUM(ABS(cf.change_amount)) FILTER (WHERE cf.change_type = 'CONSUME'), 0)::float AS total_consumed
+            FROM credit_flow cf
+            JOIN tenant_users tu ON tu.id = cf.user_id
+        )
+        SELECT
+            balance_totals.total_balance,
+            credit_totals.total_recharged,
+            credit_totals.total_consumed,
+            (SELECT COUNT(*)::bigint FROM tenant_users) AS member_count
+        FROM balance_totals
+        CROSS JOIN credit_totals
         """,
-        tenant_id,
-    )
-    recharge_row = await pool.fetchrow(
-        """
-        SELECT COALESCE(SUM(cf.change_amount), 0)::float AS total_recharged
-        FROM credit_flow cf
-        JOIN users u ON u.id = cf.user_id
-        WHERE cf.change_type = 'RECHARGE' AND u.tenant_id = $1 AND NOT u.is_deleted
-        """,
-        tenant_id,
-    )
-    consume_row = await pool.fetchrow(
-        """
-        SELECT COALESCE(SUM(ABS(cf.change_amount)), 0)::float AS total_consumed
-        FROM credit_flow cf
-        JOIN users u ON u.id = cf.user_id
-        WHERE cf.change_type = 'CONSUME' AND u.tenant_id = $1 AND NOT u.is_deleted
-        """,
-        tenant_id,
-    )
-    count_row = await pool.fetchrow(
-        "SELECT COUNT(*)::bigint AS cnt FROM users WHERE tenant_id = $1 AND NOT is_deleted",
         tenant_id,
     )
     return {
-        "total_balance": balance_row["total_balance"],
-        "total_recharged": recharge_row["total_recharged"],
-        "total_consumed": consume_row["total_consumed"],
-        "member_count": count_row["cnt"],
+        "total_balance": totals_row["total_balance"],
+        "total_recharged": totals_row["total_recharged"],
+        "total_consumed": totals_row["total_consumed"],
+        "member_count": totals_row["member_count"],
     }
 
 
 async def get_transactions(pool: Pool, page: int, page_size: int, tenant_id: int) -> dict[str, Any]:
     offset = (page - 1) * page_size
 
-    union_cte = """
-        WITH ur_per_cf AS (
+    rows = await pool.fetch(
+        """
+        WITH tenant_users AS (
             SELECT
-                CASE
-                    WHEN to_jsonb(ur) ? 'ref_id' THEN to_jsonb(ur) ->> 'ref_id'
-                    ELSE ur.id::text
-                END AS ref_id,
-                BOOL_OR(to_jsonb(ur) ? 'ref_id') AS has_ref_id,
-                SUM(credits_used) AS credits_used,
-                COUNT(*) AS ur_count,
-                MAX(task_id) AS task_id
+                id,
+                name
+            FROM users
+            WHERE tenant_id = $1
+              AND NOT is_deleted
+        ),
+        tenant_credit_flows AS (
+            SELECT
+                cf.id,
+                cf.user_id,
+                cf.change_type,
+                cf.change_amount,
+                cf.balance_after,
+                cf.ref_type,
+                cf.ref_id,
+                cf.remark,
+                cf.created_at,
+                tu.name AS username
+            FROM credit_flow cf
+            JOIN tenant_users tu ON tu.id = cf.user_id
+        ),
+        consume_flows AS (
+            SELECT *
+            FROM tenant_credit_flows
+            WHERE change_type = 'CONSUME'
+        ),
+        usage_ref_ids AS (
+            SELECT DISTINCT ref_id
+            FROM consume_flows
+            WHERE ref_type = 'usage'
+        ),
+        consume_flow_ids AS (
+            SELECT DISTINCT id::text AS credit_flow_id
+            FROM consume_flows
+        ),
+        usage_by_id AS (
+            SELECT
+                ur.id::text AS usage_id,
+                MAX(ur.task_id) AS task_id
             FROM usage_record ur
-            GROUP BY CASE
-                WHEN to_jsonb(ur) ? 'ref_id' THEN to_jsonb(ur) ->> 'ref_id'
-                ELSE ur.id::text
-            END
+            JOIN tenant_users tu ON tu.id = ur.user_id
+            JOIN usage_ref_ids refs ON refs.ref_id = ur.id::text
+            GROUP BY ur.id::text
+        ),
+        usage_by_credit_flow_id AS (
+            SELECT
+                to_jsonb(ur) ->> 'ref_id' AS credit_flow_id,
+                MAX(ur.task_id) AS task_id
+            FROM usage_record ur
+            JOIN tenant_users tu ON tu.id = ur.user_id
+            JOIN consume_flow_ids cf_ids
+                ON cf_ids.credit_flow_id = to_jsonb(ur) ->> 'ref_id'
+            WHERE to_jsonb(ur) ? 'ref_id'
+              AND (to_jsonb(ur) ->> 'ref_id') ~ '^[0-9]+$'
+            GROUP BY to_jsonb(ur) ->> 'ref_id'
+        ),
+        consume_rows AS (
+            SELECT
+                'CONSUME'::text AS change_type,
+                te.id::varchar AS task_exec_id,
+                ut.task_name,
+                cf.username,
+                COUNT(cf.id)::bigint AS call_count,
+                SUM(cf.change_amount)::float AS total_change,
+                MAX(cf.balance_after)::float AS balance_after,
+                MIN(cf.created_at) AS started_at,
+                MAX(cf.created_at) AS ended_at
+            FROM consume_flows cf
+            LEFT JOIN usage_by_id u1
+                ON cf.ref_type = 'usage'
+               AND cf.ref_id = u1.usage_id
+            LEFT JOIN usage_by_credit_flow_id u2
+                ON cf.id::text = u2.credit_flow_id
+            LEFT JOIN task_execution te
+                -- schema mismatch: usage_record.task_id is varchar while task_execution.id is int; a future migration should align these column types.
+                ON COALESCE(u1.task_id, u2.task_id) = te.id::varchar
+               AND NOT te.is_deleted
+            LEFT JOIN user_task ut
+                ON te.task_id = ut.id
+               AND NOT ut.is_deleted
+            GROUP BY te.id, ut.task_name, cf.username
+        ),
+        other_rows AS (
+            SELECT
+                cf.change_type::text AS change_type,
+                NULL AS task_exec_id,
+                cf.remark AS task_name,
+                cf.username,
+                1::bigint AS call_count,
+                cf.change_amount::float AS total_change,
+                cf.balance_after::float AS balance_after,
+                cf.created_at AS started_at,
+                cf.created_at AS ended_at
+            FROM tenant_credit_flows cf
+            WHERE cf.change_type != 'CONSUME'
+        ),
+        combined_rows AS (
+            SELECT * FROM consume_rows
+            UNION ALL
+            SELECT * FROM other_rows
         )
         SELECT
-            'CONSUME'::text AS change_type,
-            te.id::varchar AS task_exec_id,
-            ut.task_name,
-            u.name AS username,
-            COUNT(cf.id)::bigint AS call_count,
-            SUM(cf.change_amount)::float AS total_change,
-            MAX(cf.balance_after)::float AS balance_after,
-            MIN(cf.created_at) AS started_at,
-            MAX(cf.created_at) AS ended_at
-        FROM credit_flow cf
-        JOIN users u ON u.id = cf.user_id
-        LEFT JOIN ur_per_cf ur
-            ON cf.ref_type = 'usage'
-            AND (
-                (
-                    ur.has_ref_id
-                    AND ur.ref_id ~ '^[0-9]+$'
-                    -- schema mismatch: usage_record.ref_id is varchar while credit_flow.id is int; a future migration should align these column types.
-                    AND CASE WHEN ur.ref_id ~ '^[0-9]+$' THEN ur.ref_id::int END = cf.id
-                )
-                OR (
-                    NOT ur.has_ref_id
-                    AND cf.ref_id = ur.ref_id
-                )
-            )
-        LEFT JOIN task_execution te
-            -- schema mismatch: usage_record.task_id is varchar while task_execution.id is int; a future migration should align these column types.
-            ON ur.task_id = te.id::varchar
-        LEFT JOIN user_task ut ON te.task_id = ut.id
-        WHERE cf.change_type = 'CONSUME'
-          AND u.tenant_id = $1
-          AND NOT u.is_deleted
-          AND (te.id IS NULL OR NOT te.is_deleted)
-          AND (ut.id IS NULL OR NOT ut.is_deleted)
-        GROUP BY te.id, ut.task_name, u.name
-
-        UNION ALL
-
-        SELECT
-            cf.change_type::text,
-            NULL AS task_exec_id,
-            cf.remark AS task_name,
-            u.name AS username,
-            1::bigint AS call_count,
-            cf.change_amount::float AS total_change,
-            cf.balance_after::float AS balance_after,
-            cf.created_at AS started_at,
-            cf.created_at AS ended_at
-        FROM credit_flow cf
-        JOIN users u ON u.id = cf.user_id
-        WHERE cf.change_type != 'CONSUME'
-          AND u.tenant_id = $1
-          AND NOT u.is_deleted
-    """
-
-    count_row = await pool.fetchrow(
-        f"SELECT COUNT(*)::bigint AS total FROM ({union_cte}) sub",
-        tenant_id,
-    )
-
-    rows = await pool.fetch(
-        f"""
-        SELECT * FROM ({union_cte}) sub
+            combined_rows.*,
+            COUNT(*) OVER()::bigint AS total_count
+        FROM combined_rows
         ORDER BY ended_at DESC NULLS LAST
         LIMIT $2 OFFSET $3
         """,
@@ -1796,9 +1854,11 @@ async def get_transactions(pool: Pool, page: int, page_size: int, tenant_id: int
             item["started_at"] = item["started_at"].isoformat()
         if item.get("ended_at"):
             item["ended_at"] = item["ended_at"].isoformat()
+        item.pop("total_count", None)
         items.append(item)
 
-    return {"items": items, "total": count_row["total"]}
+    total = int(rows[0]["total_count"]) if rows else 0
+    return {"items": items, "total": total}
 
 
 async def get_skills(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
@@ -2220,15 +2280,18 @@ async def get_task_week_summary(pool: Pool, task_id: int, tenant_id: int) -> dic
 
 async def get_audit_log(pool: Pool, tenant_id: int, page: int = 1, page_size: int = 20) -> dict[str, Any]:
     offset = (page - 1) * page_size
-    total = await pool.fetchval(
-        'SELECT COUNT(*) FROM enterprise_audit_log WHERE tenant_id = $1', tenant_id,
-    )
-    rows = await pool.fetch(
-        """SELECT id, operator_id, operator_name, action, target_user_id, target_user_name,
-                  credits_amount, before_snapshot, after_snapshot, remark, created_at
-           FROM enterprise_audit_log WHERE tenant_id = $1
-           ORDER BY created_at DESC LIMIT $2 OFFSET $3""",
-        tenant_id, page_size, offset,
+    total, rows = await asyncio.gather(
+        pool.fetchval(
+            'SELECT COUNT(*) FROM enterprise_audit_log WHERE tenant_id = $1',
+            tenant_id,
+        ),
+        pool.fetch(
+            """SELECT id, operator_id, operator_name, action, target_user_id, target_user_name,
+                      credits_amount, before_snapshot, after_snapshot, remark, created_at
+               FROM enterprise_audit_log WHERE tenant_id = $1
+               ORDER BY created_at DESC LIMIT $2 OFFSET $3""",
+            tenant_id, page_size, offset,
+        ),
     )
     items = []
     for row in rows:
