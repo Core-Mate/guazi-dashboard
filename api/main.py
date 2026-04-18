@@ -1,9 +1,11 @@
 import asyncio
+from collections import OrderedDict
 from contextlib import asynccontextmanager, suppress
 import importlib
 import logging
 import os
-from typing import Optional
+import time
+from typing import Any, Awaitable, Callable, Optional
 
 import asyncpg
 import uvicorn
@@ -17,8 +19,62 @@ import auth
 from auth import require_api_key
 import db
 
+try:
+    from cachetools import TTLCache
+except ImportError:  # pragma: no cover
+    class TTLCache:
+        def __init__(self, maxsize: int, ttl: float):
+            self.maxsize = maxsize
+            self.ttl = ttl
+            self._data: OrderedDict[Any, tuple[Any, float]] = OrderedDict()
+
+        def _expire(self) -> None:
+            now = time.monotonic()
+            expired_keys = [
+                key for key, (_, expires_at) in self._data.items()
+                if expires_at <= now
+            ]
+            for key in expired_keys:
+                self._data.pop(key, None)
+
+        def get(self, key: Any, default: Any = None) -> Any:
+            self._expire()
+            entry = self._data.get(key)
+            if entry is None:
+                return default
+
+            value, expires_at = entry
+            if expires_at <= time.monotonic():
+                self._data.pop(key, None)
+                return default
+
+            self._data.move_to_end(key)
+            return value
+
+        def __setitem__(self, key: Any, value: Any) -> None:
+            self._expire()
+            if key in self._data:
+                self._data.pop(key, None)
+            elif len(self._data) >= self.maxsize:
+                self._data.popitem(last=False)
+            self._data[key] = (value, time.monotonic() + self.ttl)
+
+        def clear(self) -> None:
+            self._data.clear()
+
 logger = logging.getLogger(__name__)
 WARMUP_RANGES = ("today", "yesterday", "7d", "30d")
+_DASHBOARD_CACHE_TTL = 90
+_DASHBOARD_CACHE_MAXSIZE = 200
+_DASHBOARD_CACHE_MISS = object()
+_dashboard_highlights_cache = TTLCache(maxsize=_DASHBOARD_CACHE_MAXSIZE, ttl=_DASHBOARD_CACHE_TTL)
+_dashboard_highlights_lock = asyncio.Lock()
+_dashboard_charts_cache = TTLCache(maxsize=_DASHBOARD_CACHE_MAXSIZE, ttl=_DASHBOARD_CACHE_TTL)
+_dashboard_charts_lock = asyncio.Lock()
+_dashboard_aggs_cache = TTLCache(maxsize=_DASHBOARD_CACHE_MAXSIZE, ttl=_DASHBOARD_CACHE_TTL)
+_dashboard_aggs_lock = asyncio.Lock()
+_dashboard_ops_trend_cache = TTLCache(maxsize=_DASHBOARD_CACHE_MAXSIZE, ttl=_DASHBOARD_CACHE_TTL)
+_dashboard_ops_trend_lock = asyncio.Lock()
 
 
 def _get_warmup_tenant_ids() -> list[int]:
@@ -55,7 +111,8 @@ async def _warmup() -> None:
         for tenant_id in _get_warmup_tenant_ids():
             for range_value in WARMUP_RANGES:
                 try:
-                    await queries.aggregate_snapshot(pool, tenant_id, range_value)
+                    snapshot = await queries.aggregate_snapshot(pool, tenant_id, range_value)
+                    _prime_dashboard_component_caches(tenant_id, range_value, None, None, snapshot)
                     logger.info(
                         "Dashboard snapshot warmup completed for tenant_id=%s range=%s",
                         tenant_id,
@@ -103,6 +160,110 @@ def value_error_response(exc: ValueError) -> JSONResponse:
 
 def get_queries_module():
     return importlib.import_module("queries")
+
+
+def _dashboard_cache_key(
+    tenant_id: int,
+    range_param: str,
+    start: Optional[str],
+    end: Optional[str],
+) -> tuple[int, str, Optional[str], Optional[str]]:
+    return tenant_id, range_param, start, end
+
+
+def _clear_dashboard_component_caches() -> None:
+    _dashboard_highlights_cache.clear()
+    _dashboard_charts_cache.clear()
+    _dashboard_aggs_cache.clear()
+    _dashboard_ops_trend_cache.clear()
+
+
+def _prime_dashboard_component_caches(
+    tenant_id: int,
+    range_param: str,
+    start: Optional[str],
+    end: Optional[str],
+    snapshot: dict[str, Any],
+) -> None:
+    cache_key = _dashboard_cache_key(tenant_id, range_param, start, end)
+    _dashboard_highlights_cache[cache_key] = {
+        "highlights": snapshot.get("highlights", {}),
+        "achievements": snapshot.get("achievements", {}),
+    }
+    _dashboard_charts_cache[cache_key] = snapshot.get("charts", {})
+    _dashboard_aggs_cache[cache_key] = snapshot.get("aggs", {})
+    _dashboard_ops_trend_cache[cache_key] = snapshot.get("ops_trend", {})
+
+
+async def _cached_dashboard_payload(
+    cache: TTLCache,
+    lock: asyncio.Lock,
+    cache_key: tuple[int, str, Optional[str], Optional[str]],
+    loader: Callable[[], Awaitable[Any]],
+) -> Any:
+    cached_payload = cache.get(cache_key, _DASHBOARD_CACHE_MISS)
+    if cached_payload is not _DASHBOARD_CACHE_MISS:
+        return cached_payload
+
+    async with lock:
+        cached_payload = cache.get(cache_key, _DASHBOARD_CACHE_MISS)
+        if cached_payload is not _DASHBOARD_CACHE_MISS:
+            return cached_payload
+
+        payload = await loader()
+        cache[cache_key] = payload
+        return payload
+
+
+async def _load_dashboard_highlights_bundle(
+    pool: Pool,
+    tenant_id: int,
+    range_param: str,
+    start: Optional[str],
+    end: Optional[str],
+) -> dict[str, Any]:
+    queries = get_queries_module()
+    window = queries._resolve_window(range_param, start, end)
+    _, _, prev_start, prev_end, _, _, _ = window
+    prev_totals_task = asyncio.create_task(
+        queries._fetch_period_totals(pool, tenant_id, prev_start, prev_end)
+    )
+    highlights, achievements = await asyncio.gather(
+        queries.aggregate_highlights(
+            pool,
+            tenant_id,
+            range_param,
+            start,
+            end,
+            _window=window,
+            _prev_totals=prev_totals_task,
+        ),
+        queries.aggregate_achievements(
+            pool,
+            tenant_id,
+            range_param,
+            start,
+            end,
+            _window=window,
+            _prev_totals=prev_totals_task,
+        ),
+    )
+    return {
+        "highlights": highlights,
+        "achievements": achievements,
+    }
+
+
+async def _load_dashboard_ops_trend(
+    pool: Pool,
+    tenant_id: int,
+    range_param: str,
+    start: Optional[str],
+    end: Optional[str],
+) -> dict[str, Any]:
+    queries = get_queries_module()
+    cur_start, cur_end, _, _, _, unit, _ = queries._resolve_window(range_param, start, end)
+    return await queries._fetch_ops_trend(pool, tenant_id, cur_start, cur_end, unit)
 
 
 @app.get("/api/explore/tables")
@@ -290,6 +451,7 @@ async def api_distribute_credits(
         await get_queries_module().distribute_credits(
             pool, body.operator_id, body.target_user_id, body.amount, body.remark, tenant_id
         )
+        _clear_dashboard_component_caches()
         return {"success": True}
     except ValueError as exc:
         return value_error_response(exc)
@@ -314,6 +476,7 @@ async def api_update_member(
         await get_queries_module().update_member(
             pool, user_id, tenant_id, body.name, body.phone_number, body.role
         )
+        _clear_dashboard_component_caches()
         return {"success": True}
     except ValueError as exc:
         return value_error_response(exc)
@@ -329,6 +492,7 @@ async def api_delete_member(
 ):
     try:
         await get_queries_module().delete_member(pool, user_id, tenant_id)
+        _clear_dashboard_component_caches()
         return {"success": True}
     except ValueError as exc:
         return value_error_response(exc)
@@ -353,6 +517,7 @@ async def api_add_member(
         new_id = await get_queries_module().add_member(
             pool, body.name, body.phone_number, body.role, body.initial_balance, tenant_id
         )
+        _clear_dashboard_component_caches()
         return {"id": new_id, "success": True}
     except ValueError as exc:
         return value_error_response(exc)
@@ -395,26 +560,123 @@ def _dashboard_handler(fn):
     return wrapped
 
 
-app.add_api_route(
-    "/api/dashboard/highlights",
-    _dashboard_handler("aggregate_highlights"),
-    methods=["GET"],
-)
+@app.get("/api/dashboard/highlights")
+async def api_get_dashboard_highlights(
+    range: str = Query(default="7d"),
+    start: Optional[str] = Query(default=None),
+    end: Optional[str] = Query(default=None),
+    tenant_id: int = Depends(require_api_key),
+    pool: Pool = Depends(db.get_pool),
+):
+    try:
+        cache_key = _dashboard_cache_key(tenant_id, range, start, end)
+        return await _cached_dashboard_payload(
+            _dashboard_highlights_cache,
+            _dashboard_highlights_lock,
+            cache_key,
+            lambda: _load_dashboard_highlights_bundle(pool, tenant_id, range, start, end),
+        )
+    except ValueError as exc:
+        return value_error_response(exc)
+    except asyncpg.PostgresError as exc:
+        return postgres_error_response(exc)
+
+
 app.add_api_route(
     "/api/dashboard/achievements",
     _dashboard_handler("aggregate_achievements"),
     methods=["GET"],
 )
-app.add_api_route(
-    "/api/dashboard/aggregations",
-    _dashboard_handler("aggregate_aggregations"),
-    methods=["GET"],
-)
-app.add_api_route(
-    "/api/dashboard/charts",
-    _dashboard_handler("aggregate_charts"),
-    methods=["GET"],
-)
+
+
+@app.get("/api/dashboard/charts")
+async def api_get_dashboard_charts(
+    range: str = Query(default="7d"),
+    start: Optional[str] = Query(default=None),
+    end: Optional[str] = Query(default=None),
+    tenant_id: int = Depends(require_api_key),
+    pool: Pool = Depends(db.get_pool),
+):
+    try:
+        cache_key = _dashboard_cache_key(tenant_id, range, start, end)
+        return await _cached_dashboard_payload(
+            _dashboard_charts_cache,
+            _dashboard_charts_lock,
+            cache_key,
+            lambda: get_queries_module().aggregate_charts(pool, tenant_id, range, start, end),
+        )
+    except ValueError as exc:
+        return value_error_response(exc)
+    except asyncpg.PostgresError as exc:
+        return postgres_error_response(exc)
+
+
+@app.get("/api/dashboard/aggs")
+async def api_get_dashboard_aggs(
+    range: str = Query(default="7d"),
+    start: Optional[str] = Query(default=None),
+    end: Optional[str] = Query(default=None),
+    tenant_id: int = Depends(require_api_key),
+    pool: Pool = Depends(db.get_pool),
+):
+    try:
+        cache_key = _dashboard_cache_key(tenant_id, range, start, end)
+        return await _cached_dashboard_payload(
+            _dashboard_aggs_cache,
+            _dashboard_aggs_lock,
+            cache_key,
+            lambda: get_queries_module().aggregate_aggregations(pool, tenant_id, range, start, end),
+        )
+    except ValueError as exc:
+        return value_error_response(exc)
+    except asyncpg.PostgresError as exc:
+        return postgres_error_response(exc)
+
+
+@app.get("/api/dashboard/aggregations")
+async def api_get_dashboard_aggregations(
+    range: str = Query(default="7d"),
+    start: Optional[str] = Query(default=None),
+    end: Optional[str] = Query(default=None),
+    tenant_id: int = Depends(require_api_key),
+    pool: Pool = Depends(db.get_pool),
+):
+    try:
+        cache_key = _dashboard_cache_key(tenant_id, range, start, end)
+        return await _cached_dashboard_payload(
+            _dashboard_aggs_cache,
+            _dashboard_aggs_lock,
+            cache_key,
+            lambda: get_queries_module().aggregate_aggregations(pool, tenant_id, range, start, end),
+        )
+    except ValueError as exc:
+        return value_error_response(exc)
+    except asyncpg.PostgresError as exc:
+        return postgres_error_response(exc)
+
+
+@app.get("/api/dashboard/ops_trend")
+async def api_get_dashboard_ops_trend(
+    range: str = Query(default="7d"),
+    start: Optional[str] = Query(default=None),
+    end: Optional[str] = Query(default=None),
+    tenant_id: int = Depends(require_api_key),
+    pool: Pool = Depends(db.get_pool),
+):
+    try:
+        cache_key = _dashboard_cache_key(tenant_id, range, start, end)
+        return await _cached_dashboard_payload(
+            _dashboard_ops_trend_cache,
+            _dashboard_ops_trend_lock,
+            cache_key,
+            lambda: _load_dashboard_ops_trend(pool, tenant_id, range, start, end),
+        )
+    except ValueError as exc:
+        return value_error_response(exc)
+    except asyncpg.PostgresError as exc:
+        return postgres_error_response(exc)
+
+
 app.add_api_route(
     "/api/dashboard/snapshot",
     _dashboard_handler("aggregate_snapshot"),

@@ -289,16 +289,55 @@ export async function fetchDashboardData(
         query.set('start', custom.start)
         query.set('end', custom.end || '')
       }
-      var url = '/api/dashboard/snapshot?' + query.toString();
-      var res = await fetch(url, {
-        headers: { 'X-API-Key': getDashboardApiKey() },
-      });
-      if (!res.ok) {
-        delete snapshotCache[key];
-        showDashboardError('数据加载失败：HTTP ' + res.status);
-        return cloneSnapshot(EMPTY_SNAPSHOT);
+      var qs = query.toString();
+      var headers = { 'X-API-Key': getDashboardApiKey() };
+      var emptyHighlights = {
+        highlights: EMPTY_SNAPSHOT.highlights,
+        achievements: EMPTY_SNAPSHOT.achievements,
+      };
+      var emptyOpsTrend = EMPTY_SNAPSHOT.ops_trend || {
+        labels: [],
+        dates: [],
+        exec: [],
+        success: [],
+        failed: [],
+        total: [],
+        credits: [],
+        reach: [],
+        comments: [],
+        likes: [],
+        saves: [],
+        dms: [],
+        runtime_h: [],
+      };
+      function fetchPart<T>(path: string, fallback: T): Promise<T> {
+        return fetch(path + '?' + qs, { headers: headers })
+          .then(function(res) {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+          })
+          .catch(function() {
+            return fallback;
+          });
       }
-      var data = await res.json();
+      var result = await Promise.all([
+        fetchPart('/api/dashboard/highlights', emptyHighlights),
+        fetchPart('/api/dashboard/charts', EMPTY_SNAPSHOT.charts),
+        fetchPart('/api/dashboard/aggs', EMPTY_SNAPSHOT.aggs),
+        fetchPart('/api/dashboard/ops_trend', emptyOpsTrend),
+      ]);
+      var hl = result[0];
+      var charts = result[1];
+      var aggs = result[2];
+      var ops = result[3];
+      var data = {
+        range: range,
+        highlights: hl.highlights,
+        achievements: hl.achievements,
+        charts: charts,
+        aggs: aggs,
+        ops_trend: ops,
+      };
       clearDashboardError();
       snapshotCache[key] = { expiresAt: Date.now() + SNAPSHOT_CACHE_TTL, data: data };
       return cloneSnapshot(data);
