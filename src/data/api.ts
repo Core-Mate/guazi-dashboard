@@ -171,8 +171,8 @@ export async function mutateJSON<T>(method: string, path: string, body?: any): P
   }
 }
 
-export function apiAddMember(name: string, phone_number: string, role: string, initial_balance: number) {
-  return mutateJSON<{id: number; success: boolean}>('POST', '/members', { name, phone_number, role, initial_balance });
+export function apiAddMember(name: string, phone_number: string, initial_balance: number) {
+  return mutateJSON<{id: number; success: boolean}>('POST', '/members', { name, phone_number, initial_balance });
 }
 
 export function apiUpdateMember(user_id: number, updates: {name?: string; phone_number?: string; role?: string}) {

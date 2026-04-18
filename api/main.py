@@ -264,7 +264,7 @@ async def api_delete_member(
 class AddMemberRequest(BaseModel):
     name: str
     phone_number: str
-    role: str = "member"
+    role: Optional[str] = None
     initial_balance: int = Field(default=0, ge=0)
 
 

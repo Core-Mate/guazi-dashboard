@@ -2135,9 +2135,10 @@ async def delete_member(pool: Pool, user_id: int, tenant_id: int) -> None:
             )
 
 
-async def add_member(pool: Pool, name: str, phone_number: str, role: str, initial_balance: int, tenant_id: int) -> int:
+async def add_member(pool: Pool, name: str, phone_number: str, role: str | None, initial_balance: int, tenant_id: int) -> int:
     async with pool.acquire() as conn:
         async with conn.transaction():
+            role_value = role or "member"
             new_id = await conn.fetchval(
                 """
                 INSERT INTO users (name, email, "emailVerified", "phoneNumber", role, tenant_id,
@@ -2145,7 +2146,7 @@ async def add_member(pool: Pool, name: str, phone_number: str, role: str, initia
                 VALUES ($1, $2, false, $3, $4, $5, false, true, NOW(), NOW())
                 RETURNING id
                 """,
-                name, f"{phone_number}+{int(__import__('time').time())}@placeholder.local", phone_number, role, tenant_id,
+                name, f"{phone_number}+{int(__import__('time').time())}@placeholder.local", phone_number, role_value, tenant_id,
             )
 
             await conn.execute(

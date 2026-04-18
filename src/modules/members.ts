@@ -171,7 +171,6 @@ export function renderMembers(filter?) {
 export function openAddMemberModal() {
   var body = '<div class="modal-field"><label class="modal-label">姓名</label><input class="modal-input" id="newMemberName" placeholder="请输入成员姓名"></div>' +
     '<div class="modal-field"><label class="modal-label">手机号</label><input class="modal-input" id="newMemberPhone" placeholder="请输入手机号"></div>' +
-    '<div class="modal-field"><label class="modal-label">角色</label><select class="modal-select" id="newMemberRole"><option value="member">成员</option><option value="admin">管理员</option></select></div>' +
     '<div class="modal-field"><label class="modal-label">初始算力豆</label><input class="modal-input" type="number" id="newMemberBalance" value="0" min="0"></div>';
   var footer = '<button class="modal-btn modal-btn-cancel" onclick="closeModal()">取消</button>' +
     '<button class="modal-btn modal-btn-primary" onclick="addMember()">添加</button>';
@@ -181,7 +180,6 @@ export function openAddMemberModal() {
 export async function addMember() {
   var name = (document.getElementById('newMemberName') as HTMLInputElement).value.trim();
   var phone = (document.getElementById('newMemberPhone') as HTMLInputElement).value.trim();
-  var role = (document.getElementById('newMemberRole') as HTMLSelectElement).value;
   var balance = parseInt((document.getElementById('newMemberBalance') as HTMLInputElement).value) || 0;
   if (!name || !phone) { showToast('请填写姓名和手机号', 'error'); return; }
 
@@ -189,7 +187,7 @@ export async function addMember() {
   var operator = '管理员';
   var operatorMember = membersData.find(function(x) { return x.role === 'admin'; });
   if (operatorMember) operator = operatorMember.name;
-  var res = await apiAddMember(name, phone, role, balance);
+  var res = await apiAddMember(name, phone, balance);
   if (!res.ok) { stopLoading(btn, '添加'); showToast(res.error || '添加失败', 'error'); return; }
   closeModal();
   await Promise.all([refreshFromApi(), refreshWalletStats()]);
