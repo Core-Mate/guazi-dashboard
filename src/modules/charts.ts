@@ -77,6 +77,40 @@ function formatTrendLabel(value) {
     : value.slice(5).replace('-', '/');
 }
 
+function isHourlyTrendLabels(labels: any[]): boolean {
+  return Array.isArray(labels)
+    && labels.length === 24
+    && labels.every(function(label) {
+      return typeof label === 'string' && /^\d{2}:\d{2}$/.test(label);
+    });
+}
+
+function getTrendTickLabel(label, index, labels, range) {
+  var text = typeof label === 'string' ? label : String(label || '');
+  if (!text) return '';
+  if (isHourlyTrendLabels(labels) || range === 'today') return index % 3 === 0 ? text : '';
+  if (range === '7d' || labels.length === 7) return text;
+  if (range === '30d' || labels.length >= 28) return index % 3 === 0 ? text : '';
+  var step = labels.length > 14 ? 2 : 1;
+  return index % step === 0 ? text : '';
+}
+
+function buildTrendXAxisOptions() {
+  var xAxis: any = { ...axBase.x };
+  var ticks: any = { ...((axBase.x as any).ticks || {}) };
+  delete ticks.maxTicksLimit;
+  ticks.autoSkip = false;
+  ticks.maxRotation = 0;
+  ticks.minRotation = 0;
+  ticks.padding = 8;
+  ticks.callback = function(_value, index) {
+    var labels = typeof this.getLabels === 'function' ? this.getLabels() : [];
+    return getTrendTickLabel(labels[index], index, labels, currentRange);
+  };
+  xAxis.ticks = ticks;
+  return xAxis;
+}
+
 function getTrendSeries(source, key, fallback = []) {
   var series = source && Array.isArray(source[key]) ? source[key] : null;
   return series && series.length ? series : fallback;
@@ -770,7 +804,7 @@ export function ensureOpsCharts() {
         }
       },
       scales:{
-        x: { ...axBase.x },
+        x: buildTrendXAxisOptions(),
         y: { ...axBase.y, title: buildTrendAxisTitle('请选择指标') }
       },
     } as any
@@ -796,6 +830,9 @@ export function updateCharts(range: string, opsData?: any) {
   if (costChart) {
     costChart.data.labels = d.labels;
     costChart.data.datasets = buildTrendDatasets() as any;
+    if (costChart.options && costChart.options.scales) {
+      costChart.options.scales.x = buildTrendXAxisOptions();
+    }
     applyTrendDisplayMode(currentRange);
   }
   setIf('costAvg', d.costAvg ? d.costAvg.replace(' 算力豆','') : '');

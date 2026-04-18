@@ -18,6 +18,15 @@ const RIGHT_PAD = 40
 const BOTTOM_PAD = 32
 const TOP_PAD = 18
 
+function pickDisplayIndices(n: number, maxShown: number): number[] {
+  if (n <= maxShown) return Array.from({ length: n }, function(_value, i) { return i })
+  const step = Math.ceil(n / maxShown)
+  const out: number[] = []
+  for (let i = 0; i < n; i += step) out.push(i)
+  if (out[out.length - 1] !== n - 1) out.push(n - 1)
+  return out
+}
+
 function normalizeValues(values: any[], pointCount: number): number[] {
   var normalized = Array.isArray(values) ? values.slice(0, pointCount) : []
   while (normalized.length < pointCount) normalized.push(0)
@@ -80,11 +89,20 @@ export class Ridgeline {
       Math.floor(this.container.getBoundingClientRect().width || this.container.clientWidth || 0),
       LEFT_PAD + 180
     )
+    var containerWidth = Math.max(
+      Math.floor(this.container.getBoundingClientRect().width || this.container.clientWidth || 0),
+      0
+    )
     var step = ROW_H * (1 - OVERLAP)
     var axisY = totalHeight - BOTTOM_PAD
     var tickTextY = totalHeight - BOTTOM_PAD / 2 - 4
     var resolvedLabels = range(pointCount).map(function(index) {
       return labels[index] || String(index + 1)
+    })
+    var maxShown = Math.max(2, Math.floor(containerWidth / 48))
+    var shownIdx = new Set(pickDisplayIndices(resolvedLabels.length, maxShown))
+    var displayTickValues = range(pointCount).filter(function(index) {
+      return shownIdx.has(index)
     })
     var xScale = scaleLinear()
       .domain([0, pointCount > 1 ? pointCount - 1 : 1])
@@ -165,9 +183,12 @@ export class Ridgeline {
     }, this)
 
     var axis = axisBottom(xScale)
-      .tickValues(range(pointCount))
+      .tickValues(displayTickValues)
       .tickSizeOuter(0)
-      .tickFormat(function(value) { return labels[Number(value)] || '' } as any)
+      .tickFormat(function(value) {
+        var index = Number(value)
+        return shownIdx.has(index) ? resolvedLabels[index] || '' : ''
+      } as any)
 
     var axisGroup = svg.append('g')
       .attr('transform', 'translate(0,' + axisY + ')')

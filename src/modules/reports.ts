@@ -266,6 +266,53 @@ async function buildReportHTML(dim) {
     return String(text || '').replace(/\s+/g, ' ').trim();
   }
 
+  function achievementMetricMeta(item) {
+    var metric = String(item && (item.metric || item.key || item.label) || '').toLowerCase();
+    if (metric.indexOf('comment') >= 0 || metric.indexOf('评论') >= 0) return { label: '评论' };
+    if (metric.indexOf('like') >= 0 || metric.indexOf('点赞') >= 0) return { label: '点赞' };
+    if (metric.indexOf('save') >= 0 || metric.indexOf('favorite') >= 0 || metric.indexOf('collect') >= 0 || metric.indexOf('收藏') >= 0) return { label: '收藏' };
+    if (metric.indexOf('dm') >= 0 || metric.indexOf('私信') >= 0) return { label: '私信' };
+    if (metric.indexOf('reach') >= 0 || metric.indexOf('触达') >= 0) return { label: '触达' };
+    if (metric.indexOf('success') >= 0 || metric.indexOf('完成') >= 0) return { label: '完成' };
+    return { label: '达成' };
+  }
+
+  function achievementDescriptionText(item, compareText) {
+    var text = item && (item.description || item.copy || item.detail || item.delta_text || item.compare || item.text) || '';
+    text = normalizeCompareText(text);
+    if (text) return text;
+    if (compareText) return compareText;
+    return compareLabel + ' 表现平稳。';
+  }
+
+  function achievementBadgeText(item) {
+    var meta = achievementMetricMeta(item);
+    var current = toCount(item && item.current);
+    var prev = toCount(item && item.prev);
+    if ((prev == null || prev === 0) && current != null && current > 0) return '首次达成';
+    if (current != null && prev != null) {
+      var delta = current - prev;
+      if (delta > 0) return '+' + delta.toLocaleString() + ' ' + meta.label;
+      if (current > 0) return current.toLocaleString() + ' ' + meta.label;
+    }
+    if (current != null && current > 0) return current.toLocaleString() + ' ' + meta.label;
+    return '本期亮点';
+  }
+
+  function reportTrendTickLabel(label, index, labels) {
+    var text = String(label || '');
+    var list = safeArray(labels);
+    var isHourly = list.length === 24 && list.every(function(item) {
+      return typeof item === 'string' && /^\d{2}:\d{2}$/.test(item);
+    });
+    if (!text) return '';
+    if (isHourly || dim === 'day') return index % 3 === 0 ? text : '';
+    if (dim === 'week' || list.length === 7) return text;
+    if (dim === 'month' || list.length >= 28) return index % 3 === 0 ? text : '';
+    var step = list.length > 12 ? 2 : 1;
+    return index % step === 0 ? text : '';
+  }
+
   function achievementCompareMeta(item) {
     var hasRawCompare = !!(item && item.current !== undefined && item.prev !== undefined);
     if (hasRawCompare) {
@@ -376,8 +423,8 @@ async function buildReportHTML(dim) {
       chartValues.push(chartValues[0]);
       chartLabels.push(chartLabels[0] || '');
     }
-    var width = 640;
-    var height = 220;
+    var width = 780;
+    var height = 240;
     var padL = 42;
     var padR = 16;
     var padT = 16;
@@ -405,12 +452,12 @@ async function buildReportHTML(dim) {
     var polyline = points.map(function(point) {
       return point.x.toFixed(1) + ',' + point.y.toFixed(1);
     }).join(' ');
-    var skip = Math.max(1, Math.ceil(chartLabels.length / 6));
     var xLabels = '';
     for (var j = 0; j < chartLabels.length; j++) {
-      if (j % skip === 0 || j === chartLabels.length - 1) {
+      var tick = reportTrendTickLabel(chartLabels[j], j, chartLabels);
+      if (tick) {
         var labelX = padL + (plotW * j / Math.max(1, chartLabels.length - 1));
-        xLabels += '<text x="' + labelX.toFixed(1) + '" y="' + (height - 8) + '" text-anchor="middle" font-size="10" fill="#94a3b8" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Segoe UI,sans-serif">' + esc(chartLabels[j] || '') + '</text>';
+        xLabels += '<text x="' + labelX.toFixed(1) + '" y="' + (height - 8) + '" text-anchor="middle" font-size="10" fill="#94a3b8" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Segoe UI,sans-serif">' + esc(tick) + '</text>';
       }
     }
     var dots = points.map(function(point, index) {
@@ -418,7 +465,7 @@ async function buildReportHTML(dim) {
       var fill = index === points.length - 1 ? '#1d4ed8' : '#60a5fa';
       return '<circle cx="' + point.x.toFixed(1) + '" cy="' + point.y.toFixed(1) + '" r="' + r + '" fill="' + fill + '" stroke="#ffffff" stroke-width="2"/>';
     }).join('');
-    return '<svg width="100%" height="220" viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">' +
+    return '<svg width="100%" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">' +
       grid +
       xLabels +
       '<polyline points="' + polyline + '" fill="none" stroke="#2563eb" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>' +
@@ -427,9 +474,9 @@ async function buildReportHTML(dim) {
   }
 
   function sectionHeading(title) {
-    return '<div style="display:flex;align-items:center;gap:10px;font-size:18px;font-weight:700;color:#1e293b;">' +
-      '<span style="width:3px;height:18px;border-radius:999px;background:#3b82f6;display:inline-block;"></span>' +
-      '<span>' + esc(title) + '</span>' +
+    return '<div class="report-section-heading">' +
+      '<span class="report-section-accent"></span>' +
+      '<h2 class="report-h2">' + esc(title) + '</h2>' +
     '</div>';
   }
 
@@ -468,12 +515,12 @@ async function buildReportHTML(dim) {
     var seriesValues = card && card.series && safeArray(card.series.values).length
       ? card.series.values
       : safeArray(card && card.sparkline);
-    return '<div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;padding:20px;box-shadow:0 10px 24px rgba(15,23,42,0.05);display:flex;flex-direction:column;gap:12px;min-height:176px;">' +
+    return '<div class="report-card-surface" style="padding:20px;display:flex;flex-direction:column;gap:12px;min-height:176px;">' +
       '<div style="display:flex;align-items:center;gap:8px;">' +
         '<span style="width:6px;height:6px;border-radius:999px;background:' + accent + ';display:inline-block;"></span>' +
         '<span style="font-size:13px;font-weight:600;color:#475569;">' + esc(label) + '</span>' +
       '</div>' +
-      '<div style="font-size:34px;line-height:1.05;font-weight:800;color:#0f172a;letter-spacing:-0.02em;">' + esc(value) + '</div>' +
+      '<div class="report-tnum" style="font-size:34px;line-height:1.05;font-weight:800;color:#0f172a;letter-spacing:-0.02em;">' + esc(value) + '</div>' +
       '<div>' + renderTrendText(card) + '</div>' +
       '<div style="margin-top:auto;">' + miniSparklineHTML(seriesValues, accent) + '</div>' +
     '</div>';
@@ -488,12 +535,12 @@ async function buildReportHTML(dim) {
       return '<div style="min-width:0;padding:0 24px;display:flex;flex-direction:column;gap:8px;border-left:' + border + ';">' +
         '<span style="font-size:12px;font-weight:600;color:#64748b;letter-spacing:0.02em;">' + esc(item && item.label || '') + '</span>' +
         '<div style="display:flex;align-items:baseline;gap:8px;min-width:0;">' +
-          '<span style="font-size:24px;font-weight:800;color:#0f172a;line-height:1.1;">' + esc(item && item.value != null && item.value !== '' ? item.value : '—') + '</span>' +
+          '<span class="report-tnum" style="font-size:24px;font-weight:800;color:#0f172a;line-height:1.1;">' + esc(item && item.value != null && item.value !== '' ? item.value : '—') + '</span>' +
         '</div>' +
         changeHTML +
       '</div>';
     }).join('');
-    return '<div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;padding:22px 4px;box-shadow:0 10px 24px rgba(15,23,42,0.04);display:grid;grid-template-columns:repeat(3,1fr);align-items:stretch;">' + cells + '</div>';
+    return '<div class="report-card-surface" style="padding:22px 4px;display:grid;grid-template-columns:repeat(3,1fr);align-items:stretch;">' + cells + '</div>';
   }
 
   function findByKey(cards, keyName) {
@@ -506,15 +553,15 @@ async function buildReportHTML(dim) {
   }
 
   function renderBreakdownPanel(title, data, centerLabel, caption) {
-    return '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:20px;display:flex;flex-direction:column;gap:14px;min-height:320px;">' +
-      '<div style="font-size:15px;font-weight:700;color:#0f172a;">' + esc(title) + '</div>' +
+    return '<div class="report-card-surface report-breakdown-card">' +
+      '<h3 class="report-h3">' + esc(title) + '</h3>' +
       (safeArray(data).length
         ? '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;flex:1;">' +
             svgDonut(data, 160, centerLabel) +
             '<div style="width:100%;display:flex;flex-direction:column;gap:8px;">' + legendHTML(data) + '</div>' +
           '</div>'
         : placeholderHTML('暂无数据')) +
-      '<div style="font-size:13px;color:#64748b;line-height:1.5;">' + esc(caption) + '</div>' +
+      '<div class="report-subtext">' + esc(caption) + '</div>' +
     '</div>';
   }
 
@@ -586,8 +633,8 @@ async function buildReportHTML(dim) {
     trendValues = [];
   }
 
-  var platformPalette = ['#2563eb', '#3b82f6', '#60a5fa', '#93c5fd', '#1d4ed8'];
-  var interactionPalette = ['#0f172a', '#2563eb', '#3b82f6', '#60a5fa', '#94a3b8'];
+  var platformPalette = ['#2563eb', '#16a34a', '#f59e0b', '#2563eb', '#16a34a'];
+  var interactionPalette = ['#2563eb', '#16a34a', '#f59e0b', '#2563eb', '#16a34a'];
   var platformDonutData = normalizeBreakdown(platformBreakdown, platformPalette);
   var interactionDonutData = normalizeBreakdown(interactionBreakdown, interactionPalette);
 
@@ -605,20 +652,28 @@ async function buildReportHTML(dim) {
   var achievementCards = safeArray(achievements).slice(0, 3);
   var achievementHTML = achievementCards.map(function(item) {
     var compare = achievementCompareMeta(item);
-    var headline = item && (item.headline || item.text) || '本周有亮点';
-    var showCompare = !!compare.text && compare.text !== headline;
+    var headline = item && (item.headline || item.name || item.title || item.text) || '本期有亮点';
+    var description = achievementDescriptionText(item, compare.text);
     var theme = item && item.theme || (compare.cls === 'up' ? 'green' : compare.cls === 'down' ? 'orange' : 'blue');
-    return '<div class="achievement-tag achieve-' + esc(theme) + '">' +
-      '<div class="achieve-row1">' +
-        '<span class="achieve-emoji">' + esc(item && item.emoji || '✨') + '</span>' +
-        '<span class="achieve-headline">' + esc(headline) + '</span>' +
-        (showCompare ? '<span class="achieve-change hl-change-inline ' + compare.cls + '" style="margin:0;">' + esc(compare.text) + '</span>' : '') +
-        '<span class="achieve-detail">' + esc(item && (item.detail || item.compare || item.copy) || compareLabel + ' 表现平稳。') + '</span>' +
+    return '<article class="report-achievement-card achieve-' + esc(theme) + '">' +
+      '<span class="achieve-emoji">' + esc(item && item.emoji || '✨') + '</span>' +
+      '<div style="display:flex;flex-direction:column;gap:10px;flex:1;">' +
+        '<h3 class="report-achievement-title">' + esc(headline) + '</h3>' +
+        '<div class="report-achievement-desc">' + esc(description) + '</div>' +
+        (compare.text ? '<div class="report-achievement-meta">' + esc(compare.text) + '</div>' : '') +
       '</div>' +
-    '</div>';
+      '<span class="report-achievement-badge report-tnum">' + esc(achievementBadgeText(item)) + '</span>' +
+    '</article>';
   }).join('');
   if (!achievementHTML) {
-    achievementHTML = '<div class="achievement-tag achieve-gold"><div class="achieve-row1"><span class="achieve-emoji">✨</span><span class="achieve-headline">暂无亮点数据</span></div></div>';
+    achievementHTML = '<article class="report-achievement-card achieve-blue">' +
+      '<span class="achieve-emoji">✨</span>' +
+      '<div style="display:flex;flex-direction:column;gap:10px;flex:1;">' +
+        '<h3 class="report-achievement-title">暂无亮点数据</h3>' +
+        '<div class="report-achievement-desc">当前周期暂无明显增长项，数据更新后会自动补齐详细亮点说明。</div>' +
+      '</div>' +
+      '<span class="report-achievement-badge">等待数据</span>' +
+    '</article>';
   }
 
   var trendCaption = renderTrendMeta(asNumber(trendCard && trendCard.value), asNumber(trendCard && trendCard.prev)).text;
@@ -626,10 +681,10 @@ async function buildReportHTML(dim) {
   // 5 核心互动指标（顺序与调色板和效果总览里的 highlightGrid 对齐）
   var keyMetricDefs = [
     { key: 'comments', fallbackLabel: '评论数',  color: '#2563eb' },
-    { key: 'likes',    fallbackLabel: '点赞数',  color: '#3b82f6' },
-    { key: 'saves',    fallbackLabel: '收藏数',  color: '#60a5fa' },
-    { key: 'dms',      fallbackLabel: '私信数',  color: '#6366f1' },
-    { key: 'reach',    fallbackLabel: '触达量',  color: '#8b5cf6' },
+    { key: 'likes',    fallbackLabel: '点赞数',  color: '#16a34a' },
+    { key: 'saves',    fallbackLabel: '收藏数',  color: '#f59e0b' },
+    { key: 'dms',      fallbackLabel: '私信数',  color: '#2563eb' },
+    { key: 'reach',    fallbackLabel: '触达量',  color: '#16a34a' },
   ];
   var keyMetricsHTML = keyMetricDefs.map(function(def) {
     var card = findByKey(highlightCards, def.key);
@@ -647,63 +702,69 @@ async function buildReportHTML(dim) {
   var container = document.createElement('div');
   container.style.cssText = 'position:fixed;left:-9999px;top:0;pointer-events:none;';
   container.innerHTML =
-    '<div style="width:1280px;background:#ffffff;padding:32px;box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,PingFang SC,Segoe UI,sans-serif;color:#0f172a;">' +
-      '<div style="display:flex;flex-direction:column;gap:32px;">' +
-        '<section>' +
-          '<div style="background:linear-gradient(135deg,#020617 0%,#111827 100%);border-radius:24px;padding:28px 32px;display:flex;align-items:center;justify-content:space-between;gap:24px;">' +
-            '<div style="display:flex;align-items:center;gap:16px;">' +
-              '<div style="width:56px;height:56px;border-radius:18px;background:rgba(59,130,246,0.18);border:1px solid rgba(255,255,255,0.12);display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:800;color:#ffffff;">好</div>' +
-              '<div>' +
-                '<div style="font-size:13px;font-weight:700;color:#93c5fd;letter-spacing:0.08em;">好麦 AI · ' + esc(dimLabels[dim] || dimLabels.week) + '</div>' +
-                '<div style="font-size:32px;line-height:1.15;font-weight:800;color:#ffffff;margin-top:6px;">经营效果总览</div>' +
+    '<div class="report-sheet">' +
+      '<div class="report-stack">' +
+        '<section class="report-section">' +
+          '<div class="report-card-surface report-hero">' +
+            '<div class="report-hero-brand">' +
+              '<div class="report-logo">好</div>' +
+              '<div style="display:flex;flex-direction:column;gap:8px;">' +
+                '<div class="report-eyebrow">好麦 AI · ' + esc(dimLabels[dim] || dimLabels.week) + '</div>' +
+                '<h1 class="report-h1">经营效果总览</h1>' +
+                '<div class="report-subtext">聚焦完成、互动与平台分布，方便销售演示快速讲清本期成果。</div>' +
               '</div>' +
             '</div>' +
-            '<div style="text-align:right;">' +
-              '<div style="font-size:13px;color:rgba(255,255,255,0.58);">统计周期</div>' +
-              '<div style="font-size:18px;font-weight:700;color:#ffffff;margin-top:6px;">' + esc(dateLabel) + '</div>' +
+            '<div class="report-hero-meta">' +
+              '<div class="report-meta-label">统计周期</div>' +
+              '<div class="report-meta-value report-tnum">' + esc(dateLabel) + '</div>' +
             '</div>' +
           '</div>' +
         '</section>' +
 
-        '<section style="display:flex;flex-direction:column;gap:18px;">' +
+        '<section class="report-section">' +
           sectionHeading('关键指标') +
-          '<div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:16px;">' + keyMetricsHTML + '</div>' +
+          '<div class="report-key-metrics">' + keyMetricsHTML + '</div>' +
         '</section>' +
 
-        '<section style="display:flex;flex-direction:column;gap:18px;">' +
+        '<section class="report-section">' +
           sectionHeading(dim === 'day' ? '今日亮点' : dim === 'month' ? '本月亮点' : '本周亮点') +
-          '<div class="achievement-bar" style="margin-bottom:0;padding:0;">' + achievementHTML + '</div>' +
+          '<div class="report-achievement-row">' + achievementHTML + '</div>' +
         '</section>' +
 
-        '<section style="display:flex;flex-direction:column;gap:18px;">' +
+        '<section class="report-section">' +
           sectionHeading('运营概览') +
           opsRowHTML +
         '</section>' +
 
-        '<section style="display:flex;flex-direction:column;gap:18px;">' +
+        '<section class="report-section">' +
           sectionHeading('数据趋势') +
-          '<div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:20px;padding:24px;box-shadow:0 12px 28px rgba(15,23,42,0.05);">' +
-            '<div style="display:grid;grid-template-columns:1.5fr 1fr 1fr;gap:24px;align-items:stretch;">' +
-              '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:20px;display:flex;flex-direction:column;gap:14px;min-height:320px;">' +
-                '<div style="font-size:15px;font-weight:700;color:#0f172a;">完成趋势</div>' +
-                '<div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;padding:10px;flex:1;display:flex;align-items:center;justify-content:center;">' +
+          '<div class="report-card-surface" style="padding:24px;">' +
+            '<div class="report-trend-layout">' +
+              '<div class="report-card-surface report-chart-panel">' +
+                '<div style="display:flex;flex-direction:column;gap:8px;">' +
+                  '<h3 class="report-h3">完成趋势</h3>' +
+                  '<div class="report-subtext">按 ' + esc(dimLabels[dim] || dimLabels.week) + ' 维度查看完成量变化，避免横轴标签拥挤。</div>' +
+                '</div>' +
+                '<div class="report-chart-frame">' +
                   (safeArray(trendValues).length ? lineChartHTML(trendLabels, trendValues) : placeholderHTML('暂无数据')) +
                 '</div>' +
-                '<div style="font-size:13px;color:#64748b;line-height:1.5;">' + esc(trendCaption) + '</div>' +
+                '<div class="report-subtext">' + esc(trendCaption) + '</div>' +
               '</div>' +
-              renderBreakdownPanel('平台分布', platformDonutData, '平台', platformCaption) +
-              renderBreakdownPanel('互动类型分布', interactionDonutData, '互动', interactionCaption) +
+              '<div class="report-breakdown-grid">' +
+                renderBreakdownPanel('平台分布', platformDonutData, '平台', platformCaption) +
+                renderBreakdownPanel('互动类型分布', interactionDonutData, '互动', interactionCaption) +
+              '</div>' +
             '</div>' +
           '</div>' +
         '</section>' +
 
-        '<section style="display:flex;flex-direction:column;gap:18px;">' +
+        '<section class="report-section">' +
           sectionHeading('ROI') +
-          '<div style="background:linear-gradient(135deg, #f8fafc, #e2e8f0);opacity:0.75;border-radius:16px;padding:48px 32px;text-align:center;display:flex;align-items:center;justify-content:center;min-height:180px;">' +
+          '<div class="report-card-surface report-roi-card">' +
             '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;">' +
               '<div style="font-size:2.5rem;line-height:1;">🔒</div>' +
-              '<div style="font-size:24px;font-weight:800;color:#64748b;">ROI 即将到来</div>' +
-              '<div style="font-size:14px;color:#94a3b8;">人工价值 vs 算力豆支出对比，敬请期待</div>' +
+              '<h3 class="report-h3">ROI 即将到来</h3>' +
+              '<div class="report-subtext">人工价值 vs 算力豆支出对比，敬请期待。</div>' +
             '</div>' +
           '</div>' +
         '</section>' +
