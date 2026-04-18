@@ -492,10 +492,12 @@ function countUpValue(el, item, duration) {
 function buildPopoutStats(c: HighlightCard, compare) {
   var avg = c && c.stats && typeof c.stats.avg === 'number' ? c.stats.avg : 0;
   var peak = c && c.stats && typeof c.stats.peak === 'number' ? c.stats.peak : 0;
+  var avgLabel = c && c.stats && typeof c.stats.avg_label === 'string' ? c.stats.avg_label : '日均';
+  var peakLabel = c && c.stats && typeof c.stats.peak_label === 'string' ? c.stats.peak_label : '峰值';
   return '<div class="highlight-popout-stats">' +
     '<div class="hl-change ' + compare.cls + '">' + escapeHtml(compare.text) + '</div>' +
-    '<div class="popout-stat"><span class="popout-stat-val">' + avg + '</span>日均</div>' +
-    '<div class="popout-stat"><span class="popout-stat-val">' + peak + '</span>峰值</div>' +
+    '<div class="popout-stat"><span class="popout-stat-val">' + avg + '</span>' + escapeHtml(avgLabel) + '</div>' +
+    '<div class="popout-stat"><span class="popout-stat-val">' + peak + '</span>' + escapeHtml(peakLabel) + '</div>' +
   '</div>';
 }
 

@@ -23,7 +23,7 @@ export interface HighlightCard {
   change_pct: number;
   unit: string;
   series: { labels: string[]; values: number[] };
-  stats: { avg: number; peak: number };
+  stats: { avg: number; peak: number; avg_label?: string; peak_label?: string };
   sparkline?: number[];
 }
 

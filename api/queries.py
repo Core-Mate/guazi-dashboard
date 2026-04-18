@@ -454,6 +454,13 @@ def _series_stats(values: list[int]) -> dict[str, int]:
     return {"avg": avg, "peak": peak}
 
 
+def _label_for_granularity(granularity: str) -> dict[str, str]:
+    return {
+        "avg_label": "小时均" if granularity == "hour" else "日均",
+        "peak_label": "峰值",
+    }
+
+
 def _change_pct(cur: int, prev: int) -> int:
     if prev <= 0:
         return 0
@@ -483,10 +490,10 @@ async def aggregate_highlights(
     _window: Optional[tuple[datetime, datetime, datetime, datetime, str, str, int]] = None,
     _prev_totals: Any = None,
 ) -> dict[str, Any]:
-    cur_start, cur_end, prev_start, prev_end, compare_label, unit, _ = _window or _resolve_window(range_param, start, end)
+    cur_start, cur_end, prev_start, prev_end, compare_label, granularity, _ = _window or _resolve_window(range_param, start, end)
 
     bucket_rows, prev_totals = await asyncio.gather(
-        _fetch_metric_buckets(pool, tenant_id, cur_start, cur_end, unit),
+        _fetch_metric_buckets(pool, tenant_id, cur_start, cur_end, granularity),
         _resolve_async_value(
             _prev_totals
             if _prev_totals is not None
@@ -494,8 +501,9 @@ async def aggregate_highlights(
         ),
     )
 
-    labels = [_bucket_label(r["bucket"], unit) for r in bucket_rows]
+    labels = [_bucket_label(r["bucket"], granularity) for r in bucket_rows]
     bucket_key_map = {"successCount": "successes"}
+    stats_labels = _label_for_granularity(granularity)
 
     cards = []
     for d in CARD_DEFS:
@@ -512,7 +520,7 @@ async def aggregate_highlights(
             "change_pct": _change_pct(cur_total, prev_val),
             "unit": d["unit"],
             "series": {"labels": labels, "values": values},
-            "stats": _series_stats(values),
+            "stats": {**_series_stats(values), **stats_labels},
         })
 
     return {
