@@ -313,7 +313,14 @@ export function applyTrendDisplayMode(range?: string) {
   (costChart.data.datasets || []).forEach(function(dataset: any) {
     var key = getTrendKeyFromDataset(dataset);
     var values = (rawSeries[key] || []).slice();
+    var showZeroPoints = values.length > 0 && values.every(function(value) {
+      return (Number(value) || 0) === 0;
+    });
     dataset.hidden = !activeMap[key];
+    dataset.pointRadius = !dataset.hidden && showZeroPoints ? 2 : (lineBase as any).pointRadius;
+    dataset.pointHoverRadius = !dataset.hidden && showZeroPoints ? 4 : (lineBase as any).pointHoverRadius;
+    dataset.pointBackgroundColor = !dataset.hidden && showZeroPoints ? dataset.borderColor : dataset.backgroundColor;
+    dataset.pointBorderColor = dataset.borderColor;
     if (dataset.hidden || activeCount <= 1) {
       dataset.data = values;
       return;
