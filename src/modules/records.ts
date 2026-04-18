@@ -200,6 +200,17 @@ function filterOplogForView(items) {
 }
 
 var recCalState = { tab:'', field:'', viewYear:2026, viewMonth:3, open:false }
+let _recCalOpen = false
+let _recCalDocClickBound = false
+
+function bindRecCalDocClick() {
+  if (_recCalDocClickBound) return
+  _recCalDocClickBound = true
+  document.addEventListener('click', function(e) {
+    if (!_recCalOpen) return
+    recCalOutside(e)
+  })
+}
 
 function fmtDate(y,m,d) { return y+'-'+String(m+1).padStart(2,'0')+'-'+String(d).padStart(2,'0') }
 function displayDate(iso) { if(!iso) return '选择日期'; var p=iso.split('-'); return p[1]+'/'+p[2] }
@@ -231,8 +242,10 @@ function renderRecCal() {
 
 function openRecCal(tab, field, anchorEl) {
   var existing=document.getElementById('recCalDrop')
-  if(existing&&recCalState.open&&recCalState.tab===tab&&recCalState.field===field){closeRecCal();return}
+  if(existing&&_recCalOpen&&recCalState.tab===tab&&recCalState.field===field){closeRecCal();return}
   if(existing) existing.remove()
+  _recCalOpen=true
+  bindRecCalDocClick()
   recCalState.tab=tab; recCalState.field=field; recCalState.open=true
   var now=new Date(); recCalState.viewYear=now.getFullYear(); recCalState.viewMonth=now.getMonth()
   var drop=document.createElement('div')
@@ -240,13 +253,12 @@ function openRecCal(tab, field, anchorEl) {
   anchorEl.parentElement.style.position='relative'
   anchorEl.parentElement.appendChild(drop)
   renderRecCal()
-  setTimeout(function(){document.addEventListener('click',recCalOutside)},0)
 }
 
 function closeRecCal(){
+  _recCalOpen=false
   recCalState.open=false
   var d=document.getElementById('recCalDrop');if(d)d.remove()
-  document.removeEventListener('click',recCalOutside)
 }
 
 function recCalOutside(e){

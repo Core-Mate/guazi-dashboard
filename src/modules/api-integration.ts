@@ -238,7 +238,13 @@ async function fetchDashboardJSON<T>(
       headers: { 'X-API-Key': getDashboardApiKey() },
     })
     if (!resp.ok) {
-      showDashboardError(errorPrefix + '：HTTP ' + resp.status)
+      var msg = 'HTTP ' + resp.status
+      try {
+        var body = await resp.json()
+        msg = body.detail || body.error || msg
+      } catch {}
+      console.error('[fetchDashboardJSON] failed:', msg)
+      showDashboardError(errorPrefix + '：' + msg)
       return null
     }
     clearDashboardError()
@@ -251,6 +257,7 @@ async function fetchDashboardJSON<T>(
 
 function rangeToDays(range: string): number {
   if (range === 'today') return 1;
+  if (range === 'yesterday') return 1;
   if (range === '7d') return 7;
   if (range === '30d') return 30;
   return 7;

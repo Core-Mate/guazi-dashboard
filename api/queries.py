@@ -200,6 +200,17 @@ async def _fetch_metric_buckets(
                 INTERVAL '{step}'
             ) AS bucket
         ),
+        ebs_per_te AS (
+            SELECT
+                execution_id,
+                SUM(comment_count) AS comment_count,
+                SUM(like_count) AS like_count,
+                SUM(collect_count) AS collect_count,
+                SUM(dm_count) AS dm_count,
+                SUM(unique_reach) AS unique_reach
+            FROM execution_behavior_stat
+            GROUP BY execution_id
+        ),
         te_agg AS (
             SELECT
                 DATE_TRUNC('{trunc}', COALESCE(te.finished_at, te.started_at) AT TIME ZONE 'Asia/Shanghai') AS bucket,
@@ -211,7 +222,7 @@ async def _fetch_metric_buckets(
                 COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
                 COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
             FROM task_execution te
-            LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
+            LEFT JOIN ebs_per_te ebs ON ebs.execution_id = te.id
             JOIN users u ON u.id = te.user_id
             WHERE u.tenant_id = $1
               AND COALESCE(te.finished_at, te.started_at) >= $2
@@ -248,7 +259,18 @@ async def _fetch_period_totals(
     """单段窗口总和（用于环比 prev 段）。"""
     row = await pool.fetchrow(
         f"""
-        WITH te_agg AS (
+        WITH ebs_per_te AS (
+            SELECT
+                execution_id,
+                SUM(comment_count) AS comment_count,
+                SUM(like_count) AS like_count,
+                SUM(collect_count) AS collect_count,
+                SUM(dm_count) AS dm_count,
+                SUM(unique_reach) AS unique_reach
+            FROM execution_behavior_stat
+            GROUP BY execution_id
+        ),
+        te_agg AS (
             SELECT
                 COUNT(*)::bigint AS executions,
                 COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS successes,
@@ -258,7 +280,7 @@ async def _fetch_period_totals(
                 COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
                 COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
             FROM task_execution te
-            LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
+            LEFT JOIN ebs_per_te ebs ON ebs.execution_id = te.id
             JOIN users u ON u.id = te.user_id
             WHERE u.tenant_id = $1
               AND COALESCE(te.finished_at, te.started_at) >= $2
@@ -326,6 +348,17 @@ async def _fetch_ops_trend(
                 INTERVAL '{step}'
             ) AS bucket
         ),
+        ebs_per_te AS (
+            SELECT
+                execution_id,
+                SUM(comment_count) AS comment_count,
+                SUM(like_count) AS like_count,
+                SUM(collect_count) AS collect_count,
+                SUM(dm_count) AS dm_count,
+                SUM(unique_reach) AS unique_reach
+            FROM execution_behavior_stat
+            GROUP BY execution_id
+        ),
         te_agg AS (
             SELECT
                 DATE_TRUNC('{trunc}', COALESCE(te.finished_at, te.started_at) AT TIME ZONE 'Asia/Shanghai') AS bucket,
@@ -339,7 +372,7 @@ async def _fetch_ops_trend(
                 COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach,
                 COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float / 3600.0 AS runtime_h
             FROM task_execution te
-            LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
+            LEFT JOIN ebs_per_te ebs ON ebs.execution_id = te.id
             JOIN users u ON u.id = te.user_id
             WHERE u.tenant_id = $1
               AND COALESCE(te.finished_at, te.started_at) >= $2
@@ -607,7 +640,9 @@ async def aggregate_aggregations(
                     COALESCE(SUM(ur.credits_used), 0)::bigint AS credits
                 FROM task_execution te
                 JOIN users u ON u.id = te.user_id
-                LEFT JOIN usage_record ur ON ur.task_id = te.id::varchar
+                LEFT JOIN usage_record ur
+                    -- schema mismatch: usage_record.task_id is varchar while task_execution.id is int; a future migration should align these column types.
+                    ON ur.task_id = te.id::varchar
                 WHERE u.tenant_id = $1
                   AND COALESCE(te.finished_at, te.started_at) >= $2
                   AND COALESCE(te.finished_at, te.started_at) < $3
@@ -669,7 +704,9 @@ async def aggregate_aggregations(
                     COALESCE(SUM(ur.credits_used), 0)::bigint AS total_credits
                 FROM task_execution te
                 JOIN users u ON u.id = te.user_id
-                LEFT JOIN usage_record ur ON ur.task_id = te.id::varchar
+                LEFT JOIN usage_record ur
+                    -- schema mismatch: usage_record.task_id is varchar while task_execution.id is int; a future migration should align these column types.
+                    ON ur.task_id = te.id::varchar
                 WHERE u.tenant_id = $1
                   AND te.task_id IS NOT NULL
                   AND COALESCE(te.finished_at, te.started_at) >= $2
@@ -747,7 +784,9 @@ async def aggregate_aggregations(
                     COALESCE(SUM(ur.credits_used), 0)::bigint AS total_credits
                 FROM task_execution te
                 JOIN users u ON u.id = te.user_id
-                LEFT JOIN usage_record ur ON ur.task_id = te.id::varchar
+                LEFT JOIN usage_record ur
+                    -- schema mismatch: usage_record.task_id is varchar while task_execution.id is int; a future migration should align these column types.
+                    ON ur.task_id = te.id::varchar
                 WHERE u.tenant_id = $1
                   AND te.device_id IS NOT NULL
                   AND COALESCE(te.finished_at, te.started_at) >= $2
@@ -1541,11 +1580,19 @@ async def stats_tasks(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
                 COUNT(*) FILTER (WHERE te.execution_result = 'FAILED')::bigint AS fail_count
             FROM task_execution te
             JOIN users u ON u.id = te.user_id
-            WHERE u.tenant_id = $1 AND NOT u.is_deleted
+            WHERE u.tenant_id = $1
+              AND NOT te.is_deleted
+              AND NOT u.is_deleted
             GROUP BY te.task_id
         ) AS exec_stats
             ON exec_stats.task_id = ut.id
         WHERE NOT ut.is_deleted
+          AND ut.user_id IN (
+              SELECT id
+              FROM users
+              WHERE tenant_id = $1
+                AND NOT is_deleted
+          )
         ORDER BY total_executions DESC, ut.task_name
         LIMIT 50
         """,
@@ -1642,6 +1689,22 @@ async def get_transactions(pool: Pool, page: int, page_size: int, tenant_id: int
     offset = (page - 1) * page_size
 
     union_cte = """
+        WITH ur_per_cf AS (
+            SELECT
+                CASE
+                    WHEN to_jsonb(ur) ? 'ref_id' THEN to_jsonb(ur) ->> 'ref_id'
+                    ELSE ur.id::text
+                END AS ref_id,
+                BOOL_OR(to_jsonb(ur) ? 'ref_id') AS has_ref_id,
+                SUM(credits_used) AS credits_used,
+                COUNT(*) AS ur_count,
+                MAX(task_id) AS task_id
+            FROM usage_record ur
+            GROUP BY CASE
+                WHEN to_jsonb(ur) ? 'ref_id' THEN to_jsonb(ur) ->> 'ref_id'
+                ELSE ur.id::text
+            END
+        )
         SELECT
             'CONSUME'::text AS change_type,
             te.id::varchar AS task_exec_id,
@@ -1654,15 +1717,29 @@ async def get_transactions(pool: Pool, page: int, page_size: int, tenant_id: int
             MAX(cf.created_at) AS ended_at
         FROM credit_flow cf
         JOIN users u ON u.id = cf.user_id
-        LEFT JOIN usage_record ur
+        LEFT JOIN ur_per_cf ur
             ON cf.ref_type = 'usage'
-            AND cf.ref_id ~ '^[0-9]+$'
-            AND CASE WHEN cf.ref_id ~ '^[0-9]+$' THEN cf.ref_id::int END = ur.id
-        LEFT JOIN task_execution te ON ur.task_id = te.id::varchar
+            AND (
+                (
+                    ur.has_ref_id
+                    AND ur.ref_id ~ '^[0-9]+$'
+                    -- schema mismatch: usage_record.ref_id is varchar while credit_flow.id is int; a future migration should align these column types.
+                    AND CASE WHEN ur.ref_id ~ '^[0-9]+$' THEN ur.ref_id::int END = cf.id
+                )
+                OR (
+                    NOT ur.has_ref_id
+                    AND cf.ref_id = ur.ref_id
+                )
+            )
+        LEFT JOIN task_execution te
+            -- schema mismatch: usage_record.task_id is varchar while task_execution.id is int; a future migration should align these column types.
+            ON ur.task_id = te.id::varchar
         LEFT JOIN user_task ut ON te.task_id = ut.id
         WHERE cf.change_type = 'CONSUME'
           AND u.tenant_id = $1
           AND NOT u.is_deleted
+          AND (te.id IS NULL OR NOT te.is_deleted)
+          AND (ut.id IS NULL OR NOT ut.is_deleted)
         GROUP BY te.id, ut.task_name, u.name
 
         UNION ALL
@@ -1726,10 +1803,18 @@ async def get_skills(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
                    COUNT(*) FILTER (WHERE {_success_filter_sql('te')}) AS success_count
             FROM task_execution te
             JOIN users u ON u.id = te.user_id
-            WHERE u.tenant_id = $1 AND NOT u.is_deleted
+            WHERE u.tenant_id = $1
+              AND NOT te.is_deleted
+              AND NOT u.is_deleted
             GROUP BY te.task_id
         ) es ON ut.id = es.task_id
         WHERE NOT ut.is_deleted
+          AND ut.user_id IN (
+              SELECT id
+              FROM users
+              WHERE tenant_id = $1
+                AND NOT is_deleted
+          )
         ORDER BY total_executions DESC
         LIMIT 50
         """,
@@ -1760,9 +1845,12 @@ async def get_accounts(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
                 COALESCE(SUM(ABS(cf.change_amount)) FILTER (WHERE cf.change_type = 'CONSUME'), 0)::bigint AS total_credits
             FROM task_execution te
             JOIN users u ON u.id = te.user_id
-            LEFT JOIN usage_record ur ON ur.task_id = te.id::varchar
+            LEFT JOIN usage_record ur
+                -- schema mismatch: usage_record.task_id is varchar while task_execution.id is int; a future migration should align these column types.
+                ON ur.task_id = te.id::varchar
             LEFT JOIN credit_flow cf ON cf.ref_type = 'usage'
                                      AND cf.ref_id ~ '^[0-9]+$'
+                                     -- schema mismatch: credit_flow.ref_id is varchar while usage_record.id is int; a future migration should align these column types.
                                      AND CASE WHEN cf.ref_id ~ '^[0-9]+$' THEN cf.ref_id::int END = ur.id
             WHERE u.tenant_id = $1
               AND NOT te.is_deleted
@@ -1865,6 +1953,7 @@ async def get_account_week_summary(pool: Pool, account_id: int, tenant_id: int) 
                 JOIN users u ON u.id = ur.user_id
                 LEFT JOIN credit_flow cf ON cf.ref_type = 'usage'
                                          AND cf.ref_id ~ '^[0-9]+$'
+                                         -- schema mismatch: credit_flow.ref_id is varchar while usage_record.id is int; a future migration should align these column types.
                                          AND CASE WHEN cf.ref_id ~ '^[0-9]+$' THEN cf.ref_id::int END = ur.id
                                          AND cf.change_type = 'CONSUME'
                 WHERE u.id = $1

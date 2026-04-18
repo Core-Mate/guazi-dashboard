@@ -75,6 +75,8 @@ function bindSkillNamePopout(container: HTMLElement): void {
   var tipContainer = container as HTMLElement & { __tipBound?: boolean }
   if (tipContainer.__tipBound) return
   tipContainer.__tipBound = true
+  window.addEventListener('scroll', function() { hideSkillNameTip() }, true)
+  window.addEventListener('resize', function() { hideSkillNameTip() })
 
   container.addEventListener('mouseover', function(e: MouseEvent) {
     var target = getSkillNameTarget(e.target)
