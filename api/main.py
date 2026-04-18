@@ -104,80 +104,97 @@ def _get_warmup_tenant_ids() -> list[int]:
         logger.warning("Invalid TENANT_ID for warmup: %s; falling back to tenant_id=1", fallback_tenant)
         return [1]
 
+async def _refill_hot_caches() -> None:
+    started_at = time.perf_counter()
+    pool = await db.get_pool()
+    queries = get_queries_module()
+    tenants = _get_warmup_tenant_ids()
+    ranges = WARMUP_RANGES
+    for tenant_id in tenants:
+        for range_value in ranges:
+            cache_key = _dashboard_cache_key(tenant_id, range_value, None, None)
+            warmers = (
+                (
+                    "snapshot",
+                    lambda t=tenant_id, rr=range_value: queries.aggregate_snapshot(pool, t, rr),
+                ),
+                (
+                    "highlights",
+                    lambda t=tenant_id, rr=range_value, ck=cache_key: _cached_dashboard_payload(
+                        _dashboard_highlights_cache,
+                        _dashboard_highlights_lock,
+                        ck,
+                        lambda tt=t, rr2=rr: _load_dashboard_highlights_bundle(pool, tt, rr2, None, None),
+                    ),
+                ),
+                (
+                    "charts",
+                    lambda t=tenant_id, rr=range_value, ck=cache_key: _cached_dashboard_payload(
+                        _dashboard_charts_cache,
+                        _dashboard_charts_lock,
+                        ck,
+                        lambda tt=t, rr2=rr: queries.aggregate_charts(pool, tt, rr2, None, None),
+                    ),
+                ),
+                (
+                    "aggs",
+                    lambda t=tenant_id, rr=range_value, ck=cache_key: _cached_dashboard_payload(
+                        _dashboard_aggs_cache,
+                        _dashboard_aggs_lock,
+                        ck,
+                        lambda tt=t, rr2=rr: queries.aggregate_aggregations(pool, tt, rr2, None, None),
+                    ),
+                ),
+                (
+                    "ops_trend",
+                    lambda t=tenant_id, rr=range_value, ck=cache_key: _cached_dashboard_payload(
+                        _dashboard_ops_trend_cache,
+                        _dashboard_ops_trend_lock,
+                        ck,
+                        lambda tt=t, rr2=rr: _load_dashboard_ops_trend(pool, tt, rr2, None, None),
+                    ),
+                ),
+            )
+            results = await asyncio.gather(
+                *(warmer() for _, warmer in warmers),
+                return_exceptions=True,
+            )
+            failures = [
+                (name, result)
+                for (name, _), result in zip(warmers, results)
+                if isinstance(result, Exception)
+            ]
+            if failures:
+                for name, exc in failures:
+                    logger.error(
+                        "Dashboard %s warmup failed for tenant_id=%s range=%s",
+                        name,
+                        tenant_id,
+                        range_value,
+                        exc_info=(type(exc), exc, exc.__traceback__),
+                    )
+            else:
+                logger.info(
+                    "Dashboard warmup completed for tenant_id=%s range=%s",
+                    tenant_id,
+                    range_value,
+                )
+    elapsed = time.perf_counter() - started_at
+    print(f"[hot-cache-tick] refilled {len(ranges)} ranges × {len(tenants)} tenants in {elapsed:.1f}s")
+
+
+async def _hot_cache_tick_loop(interval_seconds: int = 60):
+    while True:
+        try:
+            await _refill_hot_caches()
+        except Exception as e:
+            print(f"[hot-cache-tick] refill failed: {e}")
+        await asyncio.sleep(interval_seconds)
+
 
 async def _warmup() -> None:
     try:
-        pool = await db.get_pool()
-        queries = get_queries_module()
-        for tenant_id in _get_warmup_tenant_ids():
-            for range_value in WARMUP_RANGES:
-                cache_key = _dashboard_cache_key(tenant_id, range_value, None, None)
-                warmers = (
-                    (
-                        "snapshot",
-                        lambda t=tenant_id, rr=range_value: queries.aggregate_snapshot(pool, t, rr),
-                    ),
-                    (
-                        "highlights",
-                        lambda t=tenant_id, rr=range_value, ck=cache_key: _cached_dashboard_payload(
-                            _dashboard_highlights_cache,
-                            _dashboard_highlights_lock,
-                            ck,
-                            lambda tt=t, rr2=rr: _load_dashboard_highlights_bundle(pool, tt, rr2, None, None),
-                        ),
-                    ),
-                    (
-                        "charts",
-                        lambda t=tenant_id, rr=range_value, ck=cache_key: _cached_dashboard_payload(
-                            _dashboard_charts_cache,
-                            _dashboard_charts_lock,
-                            ck,
-                            lambda tt=t, rr2=rr: queries.aggregate_charts(pool, tt, rr2, None, None),
-                        ),
-                    ),
-                    (
-                        "aggs",
-                        lambda t=tenant_id, rr=range_value, ck=cache_key: _cached_dashboard_payload(
-                            _dashboard_aggs_cache,
-                            _dashboard_aggs_lock,
-                            ck,
-                            lambda tt=t, rr2=rr: queries.aggregate_aggregations(pool, tt, rr2, None, None),
-                        ),
-                    ),
-                    (
-                        "ops_trend",
-                        lambda t=tenant_id, rr=range_value, ck=cache_key: _cached_dashboard_payload(
-                            _dashboard_ops_trend_cache,
-                            _dashboard_ops_trend_lock,
-                            ck,
-                            lambda tt=t, rr2=rr: _load_dashboard_ops_trend(pool, tt, rr2, None, None),
-                        ),
-                    ),
-                )
-                results = await asyncio.gather(
-                    *(warmer() for _, warmer in warmers),
-                    return_exceptions=True,
-                )
-                failures = [
-                    (name, result)
-                    for (name, _), result in zip(warmers, results)
-                    if isinstance(result, Exception)
-                ]
-                if failures:
-                    for name, exc in failures:
-                        logger.error(
-                            "Dashboard %s warmup failed for tenant_id=%s range=%s",
-                            name,
-                            tenant_id,
-                            range_value,
-                            exc_info=(type(exc), exc, exc.__traceback__),
-                        )
-                else:
-                    logger.info(
-                        "Dashboard warmup completed for tenant_id=%s range=%s",
-                        tenant_id,
-                        range_value,
-                    )
+        await _refill_hot_caches()
     except Exception:
         logger.exception("Dashboard snapshot warmup initialization failed")
 
@@ -186,9 +203,11 @@ async def _warmup() -> None:
 async def lifespan(app: FastAPI):
     await db.init_pool()
     warmup_task = asyncio.create_task(_warmup())
+    tick_task = asyncio.create_task(_hot_cache_tick_loop(60))
     try:
         yield
     finally:
+        tick_task.cancel()
         warmup_task.cancel()
         with suppress(asyncio.CancelledError):
             await warmup_task
