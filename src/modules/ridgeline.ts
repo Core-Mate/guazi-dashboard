@@ -35,21 +35,31 @@ export class Ridgeline {
   private xScaleFn: any = null
   private tooltip: HTMLDivElement | null = null
   private ro: ResizeObserver | null = null
-  private resizeTimer: number | null = null
+  private rafId: number | null = null
 
   constructor(container: HTMLElement) {
     this.container = container
     this.instanceId = Math.random().toString(36).slice(2, 8)
+    this.init()
     this.ro = new ResizeObserver(() => {
-      if (this.resizeTimer !== null) clearTimeout(this.resizeTimer)
-      this.resizeTimer = window.setTimeout(() => {
-        this.resizeTimer = null
-        if (this.rawSeriesList.length > 0) {
+      if (this.rafId !== null) return
+      this.rafId = requestAnimationFrame(() => {
+        this.rafId = null
+        if (this.rawSeriesList.length > 0 && this.container.clientWidth > 0) {
           this.setData(this.labels, this.rawSeriesList)
         }
-      }, 120)
+      })
     })
     this.ro.observe(container)
+  }
+
+  private init() {
+    this.container.style.background = '#0f172a'
+    this.container.style.borderRadius = '10px'
+    this.container.style.overflow = 'hidden'
+    this.container.style.padding = '20px'
+    this.container.style.boxShadow = '0 0 0 1px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04)'
+    this.container.style.position = 'relative'
   }
 
   setData(labels: string[], seriesList: RidgelineSeries[]) {
@@ -76,9 +86,6 @@ export class Ridgeline {
       .range([LEFT_PAD, plotRight])
 
     this.container.innerHTML = ''
-    this.container.style.background = '#0a0a12'
-    this.container.style.borderRadius = '10px'
-    this.container.style.overflow = 'hidden'
 
     var root = select(this.container)
     var svg = root
@@ -97,7 +104,7 @@ export class Ridgeline {
     svg.append('rect')
       .attr('width', width)
       .attr('height', totalHeight)
-      .attr('fill', '#0a0a12')
+      .attr('fill', '#0f172a')
 
     var defs = svg.append('defs')
 
@@ -147,14 +154,16 @@ export class Ridgeline {
         .datum(values)
         .attr('d', linePath as any)
         .attr('fill', 'none')
-        .attr('stroke', 'rgba(255,255,255,0.65)')
+        .attr('stroke', 'rgba(255, 255, 255, 0.35)')
         .attr('stroke-width', 1)
 
       svg.append('text')
         .attr('x', LEFT_PAD - 14)
         .attr('y', yOffset + ROW_H / 2)
-        .attr('fill', '#e2e8f0')
-        .attr('font-size', 12)
+        .attr('fill', 'rgba(226, 232, 240, 0.85)')
+        .attr('font-size', '12px')
+        .attr('font-weight', '500')
+        .attr('letter-spacing', '0.02em')
         .attr('text-anchor', 'end')
         .attr('dominant-baseline', 'middle')
         .text(series.label)
@@ -173,7 +182,7 @@ export class Ridgeline {
       .attr('stroke', '#334155')
 
     axisGroup.selectAll('text')
-      .attr('fill', '#64748b')
+      .attr('fill', 'rgba(148, 163, 184, 0.6)')
       .style('font-size', '10px')
 
     if (this.tooltip) {
@@ -198,7 +207,7 @@ export class Ridgeline {
 
     const crosshair = this.svg.append('line')
       .attr('class', 'ridge-crosshair')
-      .attr('stroke', 'rgba(255,255,255,0.35)')
+      .attr('stroke', 'rgba(147, 197, 253, 0.45)')
       .attr('stroke-dasharray', '4 4')
       .attr('stroke-width', 1)
       .style('opacity', 0)
@@ -230,12 +239,12 @@ export class Ridgeline {
       font-size: 12px;
       line-height: 1.6;
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(8px);
       z-index: 100;
       opacity: 0;
       transition: opacity 0.12s ease;
       white-space: nowrap;
     `
-    this.container.style.position = 'relative'
     this.container.appendChild(this.tooltip)
 
     const self = this
@@ -304,9 +313,9 @@ export class Ridgeline {
       this.ro.disconnect()
       this.ro = null
     }
-    if (this.resizeTimer !== null) {
-      clearTimeout(this.resizeTimer)
-      this.resizeTimer = null
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId)
+      this.rafId = null
     }
     if (this.tooltip) {
       this.tooltip.remove()

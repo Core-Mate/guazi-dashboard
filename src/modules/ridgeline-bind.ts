@@ -1,6 +1,15 @@
 import { Ridgeline, type RidgelineSeries } from './ridgeline'
 
-const PALETTE = ['#60a5fa', '#818cf8', '#a78bfa', '#c084fc', '#e879f9', '#f0abfc', '#67e8f9', '#22d3ee']
+const PALETTE = [
+  '#1e3a8a',
+  '#1e40af',
+  '#2563eb',
+  '#3b82f6',
+  '#0ea5e9',
+  '#38bdf8',
+  '#7dd3fc',
+  '#a5f3fc',
+]
 
 function buildRidgelineSeries(snap: any): { labels: string[]; seriesList: RidgelineSeries[] } {
   const ot = snap?.ops_trend || {}
