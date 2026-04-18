@@ -156,67 +156,67 @@ function clampRecordPage(tab, totalItems) {
   if (state.page > totalPages) state.page = totalPages
 }
 
-function padDate(value) {
-  return String(value).padStart(2, '0')
-}
-
-function normalizeDate(timeStr) {
-  var text = String(timeStr || '').trim()
-  if (!text) return ''
-  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10)
-  if (/^\d{4}\//.test(text)) {
-    var parsedYear = new Date(text)
-    if (!isNaN(parsedYear.getTime())) {
-      return parsedYear.getFullYear() + '-' + padDate(parsedYear.getMonth() + 1) + '-' + padDate(parsedYear.getDate())
-    }
-  }
-  var parsed = new Date('2026/' + text)
-  if (!isNaN(parsed.getTime())) {
-    return parsed.getFullYear() + '-' + padDate(parsed.getMonth() + 1) + '-' + padDate(parsed.getDate())
-  }
-  var datePart = text.split(' ')[0]
-  var parts = datePart.split('/')
-  if (parts.length === 2) return '2026-' + parts[0].padStart(2,'0') + '-' + parts[1].padStart(2,'0')
+function normalizeTransactionFilterType(value) {
+  if (value === '充值') return 'RECHARGE'
+  if (value === '消耗') return 'CONSUME'
+  if (value === '退款') return 'REFUND'
+  if (value === '赠送') return 'GIFT'
+  if (value === '过期') return 'EXPIRE'
+  if (value === '签到') return 'CHECKIN'
+  if (value === '分发') return 'DISTRIBUTE'
   return ''
 }
 
-function filterByDate(items, tab, timeField) {
-  var state = paginationState[tab]
-  if (!state || (!state.dateStart && !state.dateEnd)) return items
-  return items.filter(function(item) {
-    var normalized = normalizeDate(item[timeField])
-    if (!normalized) return true
-    if (state.dateStart && normalized < state.dateStart) return false
-    if (state.dateEnd && normalized > state.dateEnd) return false
-    return true
-  })
+function normalizeOplogFilterAction(value) {
+  if (value === '新增成员') return 'ADD_MEMBER'
+  if (value === '删除成员') return 'REMOVE_MEMBER'
+  if (value === '编辑成员') return 'MEMBER_UPDATE'
+  if (value === '封禁成员') return 'BAN_MEMBER'
+  if (value === '分发积分' || value === '分发算力豆') return 'TRANSFER_CREDITS'
+  return ''
 }
 
-function normalizeOplogAction(value) {
-  return value === '分发积分' ? '分发算力豆' : value
+function buildTransactionsFilterQuery() {
+  var state = paginationState.transactions
+  var query = new URLSearchParams()
+  var memberFilter = document.getElementById('txMemberFilter') as HTMLSelectElement | null
+  var typeFilter = document.getElementById('transTypeFilter') as HTMLSelectElement | null
+  if (memberFilter && memberFilter.value) query.set('member_id', memberFilter.value)
+  if (typeFilter) {
+    var txType = normalizeTransactionFilterType(typeFilter.value)
+    if (txType) query.set('tx_type', txType)
+  }
+  if (state.dateStart) query.set('start_date', state.dateStart)
+  if (state.dateEnd) query.set('end_date', state.dateEnd)
+  return query
 }
 
-function filterTransactionsForView(items) {
-  var filtered = filterByDate(items, 'transactions', 'time')
-  var typeFilter = document.getElementById('transTypeFilter') as HTMLSelectElement
-  if (typeFilter && typeFilter.value !== '全部类型') {
-    filtered = filtered.filter(function(item) { return item.type === typeFilter.value })
+function buildOplogFilterQuery() {
+  var state = paginationState.oplog
+  var query = new URLSearchParams()
+  var typeFilter = document.getElementById('oplogTypeFilter') as HTMLSelectElement | null
+  if (typeFilter) {
+    var action = normalizeOplogFilterAction(typeFilter.value)
+    if (action) query.set('action', action)
   }
-  var memberFilter = document.getElementById('txMemberFilter') as HTMLSelectElement
-  if (memberFilter && memberFilter.value) {
-    filtered = filtered.filter(function(item) { return item.member === memberFilter.value })
-  }
-  return sortTransactionRows(filtered)
+  if (state.dateStart) query.set('start_date', state.dateStart)
+  if (state.dateEnd) query.set('end_date', state.dateEnd)
+  return query
 }
 
-function filterOplogForView(items) {
-  var filtered = filterByDate(items, 'oplog', 'time')
-  var typeFilter = document.getElementById('oplogTypeFilter') as HTMLSelectElement
-  if (typeFilter && typeFilter.value !== '全部类型') {
-    var normalizedType = normalizeOplogAction(typeFilter.value)
-    filtered = filtered.filter(function(item) { return normalizeOplogAction(item.action) === normalizedType })
-  }
-  return sortOplogRows(filtered)
+function refreshTransactionsWithFilters() {
+  return renderTransactions(1, paginationState.transactions.pageSize)
+}
+
+function refreshOplogWithFilters() {
+  return renderOplog(1, paginationState.oplog.pageSize)
+}
+
+function ensureRecordFilterBindings() {
+  var txTypeFilter = document.getElementById('transTypeFilter') as HTMLSelectElement | null
+  if (txTypeFilter) txTypeFilter.onchange = function() { refreshTransactionsWithFilters() }
+  var oplogTypeFilter = document.getElementById('oplogTypeFilter') as HTMLSelectElement | null
+  if (oplogTypeFilter) oplogTypeFilter.onchange = function() { refreshOplogWithFilters() }
 }
 
 var recCalState = { tab:'', field:'', viewYear:2026, viewMonth:3, open:false }
@@ -296,7 +296,8 @@ function recCalPick(iso){
   state.page=1
   closeRecCal()
   updateDateDisplay(recCalState.tab)
-  renderRecordTab(recCalState.tab)
+  if (recCalState.tab === 'transactions') refreshTransactionsWithFilters()
+  else if (recCalState.tab === 'oplog') refreshOplogWithFilters()
 }
 
 function recCalNav(dir){
@@ -369,15 +370,16 @@ function ensureMemberFilter() {
   if (!select || select.options.length > 1) return
   membersData.forEach(function(m) {
     var opt = document.createElement('option')
-    opt.value = m.name
+    opt.value = String(m.id)
     opt.textContent = m.name
     select.appendChild(opt)
   })
-  select.onchange = function() { renderTransactions(1, 20) }
+  select.onchange = function() { refreshTransactionsWithFilters() }
 }
 
 function paintTransactions() {
   ensureMemberFilter()
+  ensureRecordFilterBindings()
   renderDateFilter('transactions')
   var body = document.getElementById('transactions-tbody')
   if (!body) {
@@ -385,7 +387,7 @@ function paintTransactions() {
     return
   }
   clampRecordPage('transactions', transactionState.total)
-  var rows = filterTransactionsForView(transactionState.items)
+  var rows = sortTransactionRows(transactionState.items)
   if (!rows.length) {
     body.innerHTML = '<tr><td colspan="6" style="padding:24px 12px;text-align:center;color:#94a3b8;">暂无交易记录</td></tr>'
     syncRecordSortHeaders('transactions', txSortKey, txSortDir)
@@ -402,6 +404,7 @@ function paintTransactions() {
 }
 
 function paintOplog() {
+  ensureRecordFilterBindings()
   renderDateFilter('oplog')
   var body = document.getElementById('oplog-tbody')
   if (!body) {
@@ -409,7 +412,7 @@ function paintOplog() {
     return
   }
   clampRecordPage('oplog', oplogState.total)
-  renderOplogBody(body, filterOplogForView(oplogState.items))
+  renderOplogBody(body, sortOplogRows(oplogState.items))
   syncRecordSortHeaders('oplog', oplogSortKey, oplogSortDir)
   updatePagination('oplog', oplogState.total)
 }
@@ -489,6 +492,7 @@ export function switchRecordTab(tab, btn) {
 export async function renderTransactions(page, pageSize) {
   _transactionsLoaded = false
   ensureMemberFilter()
+  ensureRecordFilterBindings()
   renderDateFilter('transactions')
   var body = document.getElementById('transactions-tbody')
   var state = paginationState.transactions
@@ -510,7 +514,7 @@ export async function renderTransactions(page, pageSize) {
     body.classList.add('is-loading')
   }, 150)
   try {
-    var data = await fetchTransactions(state.page, state.pageSize)
+    var data = await fetchTransactions(state.page, state.pageSize, buildTransactionsFilterQuery())
     applyTransactionState(data)
     _transactionsLoaded = true
     var totalPages = Math.max(1, Math.ceil(Math.max(transactionState.total, 1) / state.pageSize))
@@ -528,6 +532,7 @@ export async function renderTransactions(page, pageSize) {
 
 export async function renderOplog(page, pageSize) {
   _oplogLoaded = false
+  ensureRecordFilterBindings()
   renderDateFilter('oplog')
   var body = document.getElementById('oplog-tbody')
   var state = paginationState.oplog
@@ -549,7 +554,7 @@ export async function renderOplog(page, pageSize) {
     body.classList.add('is-loading')
   }, 150)
   try {
-    var data = await fetchAuditLog(state.page, state.pageSize)
+    var data = await fetchAuditLog(state.page, state.pageSize, buildOplogFilterQuery())
     applyOplogState(data)
     _oplogLoaded = true
     var totalPages = Math.max(1, Math.ceil(Math.max(oplogState.total, 1) / state.pageSize))
@@ -596,9 +601,9 @@ export function renderRecordTab(tab) {
 
 function csvVal(v) { return (v === undefined || v === null || v === '') ? 'N/A' : v }
 
-async function fetchAllTransactionItems() {
+async function fetchAllTransactionItems(filters?) {
   var firstPageSize = 100
-  var first = await fetchTransactions(1, firstPageSize)
+  var first = await fetchTransactions(1, firstPageSize, filters)
   if (!first.items.length && !first.total && transactionState.items.length) {
     return { items: transactionState.items.slice(), total: transactionState.total || transactionState.items.length }
   }
@@ -606,16 +611,16 @@ async function fetchAllTransactionItems() {
   var total = first.total
   var totalPages = Math.max(1, Math.ceil(Math.max(total, items.length) / firstPageSize))
   for (var page = 2; page <= totalPages; page += 1) {
-    var next = await fetchTransactions(page, firstPageSize)
+    var next = await fetchTransactions(page, firstPageSize, filters)
     if (!next.items.length) break
     items = items.concat(next.items)
   }
   return { items: items, total: total }
 }
 
-async function fetchAllOplogItems() {
+async function fetchAllOplogItems(filters?) {
   var firstPageSize = 100
-  var first = await fetchAuditLog(1, firstPageSize)
+  var first = await fetchAuditLog(1, firstPageSize, filters)
   if (!first.items.length && !first.total && oplogState.items.length) {
     return { items: oplogState.items.slice(), total: oplogState.total || oplogState.items.length }
   }
@@ -623,7 +628,7 @@ async function fetchAllOplogItems() {
   var total = first.total
   var totalPages = Math.max(1, Math.ceil(Math.max(total, items.length) / firstPageSize))
   for (var page = 2; page <= totalPages; page += 1) {
-    var next = await fetchAuditLog(page, firstPageSize)
+    var next = await fetchAuditLog(page, firstPageSize, filters)
     if (!next.items.length) break
     items = items.concat(next.items)
   }
@@ -631,25 +636,18 @@ async function fetchAllOplogItems() {
 }
 
 export async function exportTransactions() {
-  var data = await fetchAllTransactionItems()
-  var filtered = filterByDate(data.items, 'transactions', 'time')
+  var data = await fetchAllTransactionItems(buildTransactionsFilterQuery())
   var headers = ['时间', '成员', '类型', '说明', '变动', '余额']
-  var rows = filtered.map(function(item) {
+  var rows = data.items.map(function(item) {
     return [csvVal(item.time), csvVal(item.member), csvVal(item.type), csvVal(item.desc), csvVal(item.change), csvVal(item.balance)]
   })
   downloadCSV('交易历史_' + new Date().toISOString().slice(0,10) + '.csv', headers, rows)
 }
 
 export async function exportOplog() {
-  var data = await fetchAllOplogItems()
-  var filtered = filterByDate(data.items, 'oplog', 'time')
-  var typeFilter = document.getElementById('oplogTypeFilter') as HTMLSelectElement
-  if (typeFilter && typeFilter.value !== '全部类型') {
-    var normalizedType = normalizeOplogAction(typeFilter.value)
-    filtered = filtered.filter(function(item) { return normalizeOplogAction(item.action) === normalizedType })
-  }
+  var data = await fetchAllOplogItems(buildOplogFilterQuery())
   var headers = ['时间', '操作人', '操作类型', '详情', '结果']
-  var rows = filtered.map(function(item) {
+  var rows = data.items.map(function(item) {
     return [csvVal(item.time), csvVal(item.operator), csvVal(item.action), csvVal(item.target), csvVal(item.result)]
   })
   downloadCSV('操作日志_' + new Date().toISOString().slice(0,10) + '.csv', headers, rows)

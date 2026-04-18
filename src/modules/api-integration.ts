@@ -5,7 +5,7 @@ import {
 } from '../data/api'
 import { renderHighlightCards } from './charts'
 import { renderMembers } from './members'
-import { renderTransactions } from './records'
+import { paginationState, renderTransactions } from './records'
 import { renderAccountAcquireGroup } from './accounts'
 import { renderScenarioCards, renderScenarioCardsFull } from './scenarios'
 import { membersData } from '../data/members'
@@ -364,6 +364,13 @@ function formatRecordTime(value?: string | null) {
     + padRecordNumber(date.getHours()) + ':' + padRecordNumber(date.getMinutes());
 }
 
+function buildRecordQuery(page: number, pageSize: number, filters?: URLSearchParams) {
+  var query = filters ? new URLSearchParams(filters.toString()) : new URLSearchParams()
+  query.set('page', String(Math.max(1, page || 1)))
+  query.set('page_size', String(Math.max(1, Math.min(pageSize || 20, 100))))
+  return query
+}
+
 function appendAuditRemark(base: string, remark: any) {
   var text = String(remark || '').trim();
   return text ? base + '（' + text + '）' : base;
@@ -464,20 +471,14 @@ function normalizeAuditLog(data: any): { items: any[]; total: number } {
   };
 }
 
-export async function fetchAuditLog(page: number, pageSize: number, tenantId?: string): Promise<{ items: any[]; total: number }> {
-  var query = new URLSearchParams({
-    page: String(Math.max(1, page || 1)),
-    page_size: String(Math.max(1, Math.min(pageSize || 20, 100))),
-  })
+export async function fetchAuditLog(page: number, pageSize: number, filters?: URLSearchParams, tenantId?: string): Promise<{ items: any[]; total: number }> {
+  var query = buildRecordQuery(page, pageSize, filters)
   var data = await fetchDashboardJSON<any>('/api/audit-log', '操作日志加载失败', query, tenantId)
   return data ? normalizeAuditLog(data) : { items: [], total: 0 }
 }
 
-export async function fetchTransactions(page: number, pageSize: number, tenantId?: string): Promise<{ items: any[]; total: number }> {
-  var query = new URLSearchParams({
-    page: String(Math.max(1, page || 1)),
-    page_size: String(Math.max(1, Math.min(pageSize || 20, 100))),
-  })
+export async function fetchTransactions(page: number, pageSize: number, filters?: URLSearchParams, tenantId?: string): Promise<{ items: any[]; total: number }> {
+  var query = buildRecordQuery(page, pageSize, filters)
   var data = await fetchDashboardJSON<any>('/api/transactions', '交易记录加载失败', query, tenantId)
   return data ? normalizeTransactions(data) : { items: [], total: 0 }
 }
@@ -723,7 +724,7 @@ export function populateMemberFilter() {
   select.innerHTML = '<option value="">全部成员</option>';
   membersData.forEach(function(m) {
     var opt = document.createElement('option');
-    opt.value = m.name;
+    opt.value = String(m.id);
     opt.textContent = m.name;
     opt.dataset.phone = m.phone || '';
     select.appendChild(opt);
@@ -735,7 +736,7 @@ export function populateMemberFilter() {
     subtitleKey: 'phone',
   })
   select.onchange = function() {
-    renderTransactions(1, 20);
+    renderTransactions(1, paginationState.transactions.pageSize);
   };
 }
 

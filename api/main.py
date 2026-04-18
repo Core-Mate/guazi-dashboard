@@ -1,6 +1,7 @@
 import asyncio
 from collections import OrderedDict
 from contextlib import asynccontextmanager, suppress
+from datetime import date
 import importlib
 import logging
 import os
@@ -373,11 +374,18 @@ async def api_get_wallet(
 async def api_get_transactions(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    member_id: Optional[int] = Query(default=None, ge=1),
+    tx_type: Optional[str] = Query(default=None),
+    start_date: Optional[date] = Query(default=None),
+    end_date: Optional[date] = Query(default=None),
+    keyword: Optional[str] = Query(default=None),
     tenant_id: int = Depends(require_api_key),
     pool: Pool = Depends(db.get_pool),
 ):
     try:
-        return await get_queries_module().get_transactions(pool, page, page_size, tenant_id)
+        return await get_queries_module().get_transactions(
+            pool, page, page_size, tenant_id, member_id, tx_type, start_date, end_date, keyword,
+        )
     except asyncpg.PostgresError as exc:
         return postgres_error_response(exc)
 
@@ -529,11 +537,18 @@ async def api_add_member(
 async def api_get_audit_log(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    member_id: Optional[int] = Query(default=None, ge=1),
+    action: Optional[str] = Query(default=None),
+    start_date: Optional[date] = Query(default=None),
+    end_date: Optional[date] = Query(default=None),
+    keyword: Optional[str] = Query(default=None),
     tenant_id: int = Depends(require_api_key),
     pool: Pool = Depends(db.get_pool),
 ):
     try:
-        return await get_queries_module().get_audit_log(pool, tenant_id, page, page_size)
+        return await get_queries_module().get_audit_log(
+            pool, tenant_id, page, page_size, member_id, action, start_date, end_date, keyword,
+        )
     except asyncpg.PostgresError as exc:
         return postgres_error_response(exc)
 

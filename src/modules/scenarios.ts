@@ -35,6 +35,12 @@ var taskPlatformLabelMap: Record<string, string> = {
   general_app: '其他',
 }
 
+function normalizeTaskGroupKey(value: any): 'acquire' | 'ops' {
+  var key = String(value || '').trim().toLowerCase()
+  if (key.indexOf('acquire') >= 0 || key.indexOf('获客') >= 0) return 'acquire'
+  return 'ops'
+}
+
 function formatTaskMetricValue(value: number): string {
   return value > 0 ? value.toLocaleString() : '0'
 }
@@ -45,11 +51,9 @@ function formatTaskRuntimeHours(value: any): string {
 }
 
 function formatTaskCategory(category: any): string {
-  var key = String(category || '').trim().toLowerCase()
-  if (key === 'acquire') return '获客触达'
-  if (key === 'ops') return '运营维护'
-  if (key === 'other') return '其他'
-  return key || ''
+  var raw = String(category || '').trim()
+  if (!raw) return ''
+  return normalizeTaskGroupKey(raw) === 'acquire' ? '获客触达' : '运营维护'
 }
 
 function formatTaskPlatforms(platforms: any): string {
@@ -678,39 +682,19 @@ function num(value: any) {
 }
 
 function groupMeta(group: any) {
-  var rawId = getScenarioGroupKey(group) || 'acquire'
-  if (rawId.indexOf('other') >= 0 || rawId.indexOf('其他') >= 0) {
-    return {
-      key: 'other',
-      id: 'other',
-      icon: group.icon || '📦',
-      name: group.name || '其他',
-      extraCols: [],
-      extraFn: function() { return [] },
-    }
-  }
-  if (rawId.indexOf('research') >= 0 || rawId.indexOf('调研') >= 0) {
-    return {
-      id: 'research',
-      icon: group.icon || '🔎',
-      name: group.name || '内容调研',
-      extraCols: ['采集量', '点赞', '收藏', '私信', '触达量'],
-      extraFn: function(row) { return [row.comments, row.likes, row.favorites, row.dms, row.uniqueReach] },
-    }
-  }
-  if (rawId.indexOf('ops') >= 0 || rawId.indexOf('运维') >= 0 || rawId.indexOf('运营') >= 0) {
+  if (normalizeTaskGroupKey(getScenarioGroupKey(group)) === 'ops') {
     return {
       id: 'ops',
-      icon: group.icon || '🛠️',
-      name: group.name || '运营维护',
+      icon: '🛠️',
+      name: '运营维护',
       extraCols: ['处理量', '点赞', '收藏', '私信', '触达量'],
       extraFn: function(row) { return [row.comments, row.likes, row.favorites, row.dms, row.uniqueReach] },
     }
   }
   return {
     id: 'acquire',
-    icon: group.icon || '🎯',
-    name: group.name || '获客触达',
+    icon: '🎯',
+    name: '获客触达',
     extraCols: ['评论', '点赞', '收藏', '私信', '触达量'],
     extraFn: function(row) { return [row.comments, row.likes, row.favorites, row.dms, row.uniqueReach] },
   }
@@ -726,12 +710,13 @@ function mapSkillItems(items: any[], meta: any) {
     var success = num(item.success_count)
     var credits = num(item.total_credits)
     var durationSec = Math.round(num(item.runtime_h) * 3600)
+    var taskGroup = normalizeTaskGroupKey(item.task_group || meta.id)
     var taskId = item.skill_id ?? item.task_id ?? item.id ?? ''
     var skillLabel = String(item.skill_name ?? item.task_name ?? item.name ?? item.label ?? 'task').trim() || 'task'
     var skillFallback = skillLabel.replace(/\s+/g, '-').slice(0, 12) + '-' + (index + 1)
     return {
       taskId: taskId != null && taskId !== '' ? String(taskId) : '',
-      taskGroup: item.task_group || meta.id,
+      taskGroup: taskGroup,
       skill: item.skillCode || item.skill_code || item.skill || item.key || (taskId ? ('S' + taskId) : skillFallback),
       skillName: item.skillName || item.skill_name || item.name || item.label || '未命名指令',
       description: item.description || '',
@@ -767,55 +752,50 @@ export function renderSkillGroupsFromAggs(groups: any[]) {
     return
   }
 
-  var acquireGroup = sourceGroups.find(function(group) {
-    return getScenarioGroupKey(group) === 'acquire'
-  })
-  var acquireSkills = getGroupItems(acquireGroup)
-
-  var researchItems = sourceGroups.reduce(function(items, group) {
-    if (getScenarioGroupKey(group) === 'research') {
-      items.push.apply(items, getGroupItems(group))
-    }
-    return items
-  }, [])
-  var opsItems = sourceGroups.reduce(function(items, group) {
-    if (getScenarioGroupKey(group) === 'ops') {
-      items.push.apply(items, getGroupItems(group))
-    }
-    return items
-  }, [])
-  var otherItems = researchItems.concat(opsItems)
-  var otherGroup = otherItems.length ? {
-    key: 'other',
-    id: 'other',
-    name: '其他',
-    icon: '📦',
-    items: otherItems,
-  } : null
-
-  if (acquireSkills.length === 0 && !otherGroup) return
-
   scenarioGroups.length = 0
   enabledScenarios.length = 0
   Object.keys(skillData).forEach(function(key) { delete skillData[key] })
 
-  ;[acquireGroup, otherGroup].forEach(function(group) {
-    if (!group) return
-    var meta = groupMeta(group)
+  var mergedGroups: Record<string, any> = {}
+  var groupOrder: string[] = []
+
+  sourceGroups.forEach(function(group) {
     var items = getGroupItems(group)
     if (!items.length) return
+    var meta = groupMeta(group)
+    var existing = mergedGroups[meta.id]
+    if (!existing) {
+      existing = {
+        color: group.color || (meta.id === 'acquire' ? '#ff6900' : '#2196f3'),
+        meta: meta,
+        items: [],
+        success_count: 0,
+        total_credits: 0,
+      }
+      mergedGroups[meta.id] = existing
+      groupOrder.push(meta.id)
+    }
+    existing.items.push.apply(existing.items, items)
+    existing.success_count += getScenarioGroupSuccessCount(group)
+    existing.total_credits += getScenarioGroupTotalCredits(group)
+  })
+
+  groupOrder.forEach(function(groupId) {
+    var entry = mergedGroups[groupId]
+    if (!entry || !entry.items.length) return
+    var meta = entry.meta
     scenarioGroups.push({
       id: meta.id,
       icon: meta.icon,
       name: meta.name,
-      color: group.color || '#6366f1',
+      color: entry.color,
       extraCols: meta.extraCols,
       extraFn: meta.extraFn,
-      success_count: getScenarioGroupSuccessCount(group),
-      total_credits: getScenarioGroupTotalCredits(group),
+      success_count: entry.success_count,
+      total_credits: entry.total_credits,
     })
     enabledScenarios.push(meta.id)
-    skillData[meta.id] = mapSkillItems(items, meta)
+    skillData[meta.id] = mapSkillItems(entry.items, meta)
   })
 
   renderScenarioCards()

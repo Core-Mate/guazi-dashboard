@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import sys
 import time
 from collections import OrderedDict, defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 from asyncpg import Pool
@@ -102,43 +101,15 @@ INTERACTION_META = [
     ("dms", "私信", "#93c5fd"),
 ]
 
-CATEGORY_META = {
+TASK_GROUP_META = {
     "acquire": {"label": "🎯 获客触达", "emoji": "🎯", "color": "#ff6900"},
-    "research": {"label": "📊 内容调研", "emoji": "📊", "color": "#4caf50"},
     "ops": {"label": "🛠️ 运营协作", "emoji": "🛠️", "color": "#2196f3"},
-}
-
-# 把 user_task.category (DB enum: taskcategory) 映射到 dashboard 三大组
-# DB enum 实际值: CONTENT_PUBLISH, SOCIAL_INTERACT, AUTO_REPLY, DATA_COLLECT, CUSTOM
-CATEGORY_GROUP = {
-    "CONTENT_PUBLISH": "acquire",
-    "SOCIAL_INTERACT": "acquire",
-    "AUTO_REPLY": "acquire",
-    "DATA_COLLECT": "ops",
-    "CUSTOM": "ops",
 }
 
 TASK_GROUP_LABEL = {
     "acquire": "获客触达",
-    "research": "内容调研",
     "ops": "运营协作",
 }
-
-ACQUIRE_TASK_PATTERN = re.compile(r"SOCIAL_INTERACT|AUTO_REPLY|CONTENT_PUBLISH", re.IGNORECASE)
-OPS_TASK_PATTERN = re.compile(r"发布|群发|自动回复|回复|发帖")
-
-
-def _infer_task_group(category: Any, task_name: Any) -> str:
-    category_key = str(category or "").strip().upper()
-    if category_key:
-        return CATEGORY_GROUP.get(category_key, "research")
-
-    name = str(task_name or "")
-    if ACQUIRE_TASK_PATTERN.search(name):
-        return "acquire"
-    if OPS_TASK_PATTERN.search(name):
-        return "ops"
-    return CATEGORY_GROUP.get(category_key, "research")
 
 
 def _resolve_window(
@@ -740,17 +711,7 @@ async def aggregate_aggregations(
                     COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
                     COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
                     COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
-                    COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach,
-                    COALESCE(
-                        SUM(
-                            COALESCE(ebs.comment_count, 0) +
-                            COALESCE(ebs.like_count, 0) +
-                            COALESCE(ebs.collect_count, 0) +
-                            COALESCE(ebs.dm_count, 0) +
-                            COALESCE(ebs.unique_reach, 0)
-                        ),
-                        0
-                    )::bigint AS engagement_total
+                    COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
                 FROM task_execution te
                 LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
                 JOIN users u ON u.id = te.user_id
@@ -782,9 +743,14 @@ async def aggregate_aggregations(
             SELECT
                 ut.id AS skill_id,
                 ut.task_name AS skill_name,
-                ut.category,
                 CASE
-                    WHEN COALESCE(skill_te_agg.engagement_total, 0) > 0 THEN 'acquire'
+                    WHEN (
+                        COALESCE(skill_te_agg.comments, 0) +
+                        COALESCE(skill_te_agg.likes, 0) +
+                        COALESCE(skill_te_agg.saves, 0) +
+                        COALESCE(skill_te_agg.dms, 0) +
+                        COALESCE(skill_te_agg.reach, 0)
+                    ) > 0 THEN 'acquire'
                     ELSE 'ops'
                 END AS task_group,
                 ut.related_platforms,
@@ -921,7 +887,7 @@ async def aggregate_aggregations(
 
     # 按 execution_behavior_stat 行为数据动态分组
     groups: dict[str, dict[str, Any]] = {}
-    for k, meta in CATEGORY_META.items():
+    for k, meta in TASK_GROUP_META.items():
         groups[k] = {
             "key": k,
             "label": meta["label"],
@@ -940,7 +906,7 @@ async def aggregate_aggregations(
             "skill_code": f"S{r['skill_id']}",
             "skill_name": r["skill_name"],
             "description": r["description"] or "",
-            "category": r["category"],
+            "category": group_key,
             "task_group": group_key,
             "exec": int(r["exec_count"]),
             "success_count": int(r["success_count"]),
@@ -1647,7 +1613,10 @@ async def stats_tasks(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
         f"""
         SELECT
             ut.task_name,
-            ut.category,
+            CASE
+                WHEN COALESCE(exec_stats.engagement_total, 0) > 0 THEN 'acquire'
+                ELSE 'ops'
+            END AS task_group,
             ut.related_platforms,
             COALESCE(exec_stats.total_executions, 0)::bigint AS total_executions,
             COALESCE(exec_stats.success_count, 0)::bigint AS success_count,
@@ -1658,9 +1627,20 @@ async def stats_tasks(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
                 te.task_id,
                 COUNT(*)::bigint AS total_executions,
                 COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success_count,
-                COUNT(*) FILTER (WHERE te.execution_result = 'FAILED')::bigint AS fail_count
+                COUNT(*) FILTER (WHERE te.execution_result = 'FAILED')::bigint AS fail_count,
+                COALESCE(
+                    SUM(
+                        COALESCE(ebs.comment_count, 0) +
+                        COALESCE(ebs.like_count, 0) +
+                        COALESCE(ebs.collect_count, 0) +
+                        COALESCE(ebs.dm_count, 0) +
+                        COALESCE(ebs.unique_reach, 0)
+                    ),
+                    0
+                )::bigint AS engagement_total
             FROM task_execution te
             JOIN users u ON u.id = te.user_id
+            LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
             WHERE u.tenant_id = $1
               AND NOT te.is_deleted
               AND NOT u.is_deleted
@@ -1684,8 +1664,11 @@ async def stats_tasks(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
     for row in rows:
         item = dict(row)
         raw_task_name = item.get("task_name")
-        group_key = _infer_task_group(item.get("category"), raw_task_name)
+        group_key = str(item.get("task_group") or "ops")
+        if group_key != "acquire":
+            group_key = "ops"
         item["task_detail_name"] = raw_task_name
+        item["category"] = TASK_GROUP_LABEL.get(group_key, group_key)
         item["task_group"] = group_key
         item["task_name"] = TASK_GROUP_LABEL.get(group_key, str(raw_task_name or "未命名任务"))
         items.append(item)
@@ -1766,8 +1749,175 @@ async def get_wallet(pool: Pool, tenant_id: int) -> dict[str, Any]:
     }
 
 
-async def get_transactions(pool: Pool, page: int, page_size: int, tenant_id: int) -> dict[str, Any]:
+def _append_optional_query_condition(
+    clauses: list[str],
+    params: list[Any],
+    template: str,
+    value: Any,
+) -> None:
+    if value is None:
+        return
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return
+    params.append(value)
+    clauses.append(template.format(param_index=len(params)))
+
+
+def _normalize_transaction_filter_value(value: str | None) -> str | None:
+    if not value:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    upper = raw.upper()
+    aliases = {
+        "CHARGE": "RECHARGE",
+        "RECHARGE": "RECHARGE",
+        "CONSUME": "CONSUME",
+        "DISTRIBUTE": "DISTRIBUTE",
+        "DEDUCT": "DEDUCT",
+        "GIFT": "GIFT",
+        "EXPIRE": "EXPIRE",
+        "CHECKIN": "CHECKIN",
+        "SIGNIN": "SIGNIN",
+        "充值": "RECHARGE",
+        "消耗": "CONSUME",
+        "分发": "DISTRIBUTE",
+        "扣减": "DEDUCT",
+        "赠送": "GIFT",
+        "过期": "EXPIRE",
+        "签到": "CHECKIN",
+    }
+    return aliases.get(upper) or aliases.get(raw) or upper
+
+
+def _normalize_audit_action_filter(value: str | None) -> str | None:
+    if not value:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    upper = raw.upper()
+    aliases = {
+        "TRANSFER_CREDITS": "TRANSFER_CREDITS",
+        "ADD_MEMBER": "ADD_MEMBER",
+        "REMOVE_MEMBER": "REMOVE_MEMBER",
+        "MEMBER_UPDATE": "MEMBER_UPDATE",
+        "BAN_MEMBER": "BAN_MEMBER",
+        "分发积分": "TRANSFER_CREDITS",
+        "分发算力豆": "TRANSFER_CREDITS",
+        "新增成员": "ADD_MEMBER",
+        "删除成员": "REMOVE_MEMBER",
+        "编辑成员": "MEMBER_UPDATE",
+        "封禁成员": "BAN_MEMBER",
+    }
+    return aliases.get(upper) or aliases.get(raw) or upper
+
+
+def _build_transactions_where_clause(
+    tenant_id: int,
+    member_id: int | None,
+    tx_type: str | None,
+    start_date: date | None,
+    end_date: date | None,
+    keyword: str | None,
+) -> tuple[str, list[Any]]:
+    params: list[Any] = [tenant_id]
+    clauses: list[str] = []
+    normalized_tx_type = _normalize_transaction_filter_value(tx_type)
+    _append_optional_query_condition(clauses, params, "sub.user_id = ${param_index}", member_id)
+    _append_optional_query_condition(
+        clauses, params, "UPPER(sub.change_type) = ${param_index}", normalized_tx_type,
+    )
+    _append_optional_query_condition(
+        clauses,
+        params,
+        "DATE(COALESCE(sub.ended_at, sub.started_at) AT TIME ZONE 'Asia/Shanghai') >= ${param_index}",
+        start_date,
+    )
+    _append_optional_query_condition(
+        clauses,
+        params,
+        "DATE(COALESCE(sub.ended_at, sub.started_at) AT TIME ZONE 'Asia/Shanghai') <= ${param_index}",
+        end_date,
+    )
+    if keyword and keyword.strip():
+        params.append(f"%{keyword.strip()}%")
+        keyword_index = len(params)
+        clauses.append(
+            "("
+            f"COALESCE(sub.username, '') ILIKE ${keyword_index} OR "
+            f"COALESCE(sub.task_name, '') ILIKE ${keyword_index} OR "
+            f"COALESCE(sub.task_exec_id, '') ILIKE ${keyword_index} OR "
+            f"COALESCE(sub.change_type, '') ILIKE ${keyword_index}"
+            ")"
+        )
+    return (f"WHERE {' AND '.join(clauses)}" if clauses else ""), params
+
+
+def _build_audit_log_where_clause(
+    tenant_id: int,
+    member_id: int | None,
+    action: str | None,
+    start_date: date | None,
+    end_date: date | None,
+    keyword: str | None,
+) -> tuple[str, list[Any]]:
+    params: list[Any] = [tenant_id]
+    clauses: list[str] = ["tenant_id = $1"]
+    normalized_action = _normalize_audit_action_filter(action)
+    _append_optional_query_condition(
+        clauses,
+        params,
+        "(operator_id = ${param_index} OR target_user_id = ${param_index})",
+        member_id,
+    )
+    _append_optional_query_condition(
+        clauses, params, "UPPER(action) = ${param_index}", normalized_action,
+    )
+    _append_optional_query_condition(
+        clauses,
+        params,
+        "DATE(created_at AT TIME ZONE 'Asia/Shanghai') >= ${param_index}",
+        start_date,
+    )
+    _append_optional_query_condition(
+        clauses,
+        params,
+        "DATE(created_at AT TIME ZONE 'Asia/Shanghai') <= ${param_index}",
+        end_date,
+    )
+    if keyword and keyword.strip():
+        params.append(f"%{keyword.strip()}%")
+        keyword_index = len(params)
+        clauses.append(
+            "("
+            f"COALESCE(operator_name, '') ILIKE ${keyword_index} OR "
+            f"COALESCE(target_user_name, '') ILIKE ${keyword_index} OR "
+            f"COALESCE(remark, '') ILIKE ${keyword_index} OR "
+            f"COALESCE(action, '') ILIKE ${keyword_index}"
+            ")"
+        )
+    return f"WHERE {' AND '.join(clauses)}", params
+
+
+async def get_transactions(
+    pool: Pool,
+    page: int,
+    page_size: int,
+    tenant_id: int,
+    member_id: int | None = None,
+    tx_type: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    keyword: str | None = None,
+) -> dict[str, Any]:
     offset = (page - 1) * page_size
+    where_clause, query_args = _build_transactions_where_clause(
+        tenant_id, member_id, tx_type, start_date, end_date, keyword,
+    )
 
     union_cte = """
         WITH ur_per_cf AS (
@@ -1788,6 +1938,7 @@ async def get_transactions(pool: Pool, page: int, page_size: int, tenant_id: int
         )
         SELECT
             'CONSUME'::text AS change_type,
+            u.id AS user_id,
             te.id::varchar AS task_exec_id,
             ut.task_name,
             u.name AS username,
@@ -1821,12 +1972,13 @@ async def get_transactions(pool: Pool, page: int, page_size: int, tenant_id: int
           AND NOT u.is_deleted
           AND (te.id IS NULL OR NOT te.is_deleted)
           AND (ut.id IS NULL OR NOT ut.is_deleted)
-        GROUP BY te.id, ut.task_name, u.name
+        GROUP BY te.id, ut.task_name, u.id, u.name
 
         UNION ALL
 
         SELECT
             cf.change_type::text,
+            u.id AS user_id,
             NULL AS task_exec_id,
             cf.remark AS task_name,
             u.name AS username,
@@ -1843,17 +1995,30 @@ async def get_transactions(pool: Pool, page: int, page_size: int, tenant_id: int
     """
 
     count_row = await pool.fetchrow(
-        f"SELECT COUNT(*)::bigint AS total FROM ({union_cte}) sub",
-        tenant_id,
+        f"SELECT COUNT(*)::bigint AS total FROM ({union_cte}) sub {where_clause}",
+        *query_args,
     )
 
+    limit_index = len(query_args) + 1
+    offset_index = len(query_args) + 2
     rows = await pool.fetch(
         f"""
-        SELECT * FROM ({union_cte}) sub
+        SELECT
+            change_type,
+            task_exec_id,
+            task_name,
+            username,
+            call_count,
+            total_change,
+            balance_after,
+            started_at,
+            ended_at
+        FROM ({union_cte}) sub
+        {where_clause}
         ORDER BY ended_at DESC NULLS LAST
-        LIMIT $2 OFFSET $3
+        LIMIT ${limit_index} OFFSET ${offset_index}
         """,
-        tenant_id,
+        *query_args,
         page_size,
         offset,
     )
@@ -2287,17 +2452,37 @@ async def get_task_week_summary(pool: Pool, task_id: int, tenant_id: int) -> dic
     }
 
 
-async def get_audit_log(pool: Pool, tenant_id: int, page: int = 1, page_size: int = 20) -> dict[str, Any]:
+async def get_audit_log(
+    pool: Pool,
+    tenant_id: int,
+    page: int = 1,
+    page_size: int = 20,
+    member_id: int | None = None,
+    action: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    keyword: str | None = None,
+) -> dict[str, Any]:
     offset = (page - 1) * page_size
-    total = await pool.fetchval(
-        'SELECT COUNT(*) FROM enterprise_audit_log WHERE tenant_id = $1', tenant_id,
+    where_clause, query_args = _build_audit_log_where_clause(
+        tenant_id, member_id, action, start_date, end_date, keyword,
     )
+    total = await pool.fetchval(
+        f"SELECT COUNT(*)::bigint FROM enterprise_audit_log {where_clause}",
+        *query_args,
+    )
+    limit_index = len(query_args) + 1
+    offset_index = len(query_args) + 2
     rows = await pool.fetch(
         """SELECT id, operator_id, operator_name, action, target_user_id, target_user_name,
                   credits_amount, before_snapshot, after_snapshot, remark, created_at
-           FROM enterprise_audit_log WHERE tenant_id = $1
-           ORDER BY created_at DESC LIMIT $2 OFFSET $3""",
-        tenant_id, page_size, offset,
+           FROM enterprise_audit_log {where_clause}
+           ORDER BY created_at DESC LIMIT {limit_param} OFFSET {offset_param}""".format(
+            where_clause=where_clause,
+            limit_param=f"${limit_index}",
+            offset_param=f"${offset_index}",
+        ),
+        *query_args, page_size, offset,
     )
     items = []
     for row in rows:
