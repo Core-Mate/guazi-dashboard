@@ -13,26 +13,66 @@ function clearDropdownTimer(wrapper: HTMLElement) {
   delete wrapper.dataset.closeTimer
 }
 
-function positionPanel(anchor: HTMLElement, panel: HTMLElement) {
-  var rect = anchor.getBoundingClientRect();
-  var vh = window.innerHeight;
-  var panelH = panel.scrollHeight || 240;
-  var spaceBelow = vh - rect.bottom;
-  var spaceAbove = rect.top;
-  
-  panel.style.position = 'absolute';
-  if (panelH > spaceBelow && spaceAbove > spaceBelow) {
-    panel.style.top = 'auto';
-    panel.style.bottom = 'calc(100% + 4px)';
-    panel.style.maxHeight = Math.max(160, spaceAbove - 16) + 'px';
-    panel.classList.add('flip-up');
-  } else {
-    panel.style.top = 'calc(100% + 4px)';
-    panel.style.bottom = 'auto';
-    panel.style.maxHeight = Math.max(160, spaceBelow - 16) + 'px';
-    panel.classList.remove('flip-up');
+export function positionDropdownPanel(panel: HTMLElement, trigger: HTMLElement) {
+  var rect = trigger.getBoundingClientRect()
+  var vw = window.innerWidth
+  var vh = window.innerHeight
+
+  panel.classList.remove('flip-up')
+  panel.style.position = 'fixed'
+  panel.style.top = rect.bottom + 4 + 'px'
+  panel.style.left = rect.left + 'px'
+  panel.style.bottom = ''
+  panel.style.right = ''
+  panel.style.width = ''
+  panel.style.minWidth = Math.min(rect.width, vw - 16) + 'px'
+  panel.style.maxWidth = 'calc(100vw - 16px)'
+
+  var prevVisibility = panel.style.visibility
+  var prevPointerEvents = panel.style.pointerEvents
+  var prevTransform = panel.style.transform
+  var prevTransition = panel.style.transition
+
+  panel.style.visibility = 'hidden'
+  panel.style.pointerEvents = 'none'
+  panel.style.maxHeight = 'none'
+  panel.style.transform = 'none'
+  panel.style.transition = 'none'
+
+  void panel.offsetHeight
+
+  var panelRect = panel.getBoundingClientRect()
+  var panelWidth = panelRect.width
+  var panelHeight = panelRect.height
+  var nextLeft = rect.left
+
+  if (nextLeft + panelWidth > vw - 8) {
+    nextLeft = rect.right - panelWidth
   }
-  panel.style.overflowY = 'auto';
+  if (nextLeft + panelWidth > vw - 8) {
+    nextLeft = Math.max(8, vw - panelWidth - 8)
+  }
+  if (nextLeft < 8) {
+    nextLeft = 8
+  }
+
+  var nextTop = rect.bottom + 4
+  var availableHeight = vh - rect.bottom - 12
+  if (rect.bottom + panelHeight > vh - 8) {
+    panel.classList.add('flip-up')
+    nextTop = Math.max(8, rect.top - panelHeight - 4)
+    availableHeight = rect.top - 12
+  }
+
+  panel.style.left = nextLeft + 'px'
+  panel.style.top = nextTop + 'px'
+  panel.style.maxHeight = Math.max(120, availableHeight) + 'px'
+  panel.style.overflowY = panel.classList.contains('searchable') ? 'hidden' : 'auto'
+
+  panel.style.visibility = prevVisibility
+  panel.style.pointerEvents = prevPointerEvents
+  panel.style.transform = prevTransform
+  panel.style.transition = prevTransition
 }
 
 function openDropdown(wrapper: HTMLElement) {
@@ -105,7 +145,7 @@ function buildDropdownPanel(select: HTMLSelectElement, wrapper: HTMLElement, opt
       return;
     }
     closeOtherDropdowns(wrapper);
-    positionPanel(trigger, panel);
+    positionDropdownPanel(panel, trigger);
     if (opts && opts.searchable) {
       var searchInput = panel.querySelector('.dropdown-search') as HTMLInputElement | null;
       if (searchInput) {
@@ -146,6 +186,19 @@ export function initCustomDropdowns() {
         closeDropdown(w as HTMLElement);
       });
     });
+  }
+
+  if (!(window as any).__customSelectResizeBound) {
+    (window as any).__customSelectResizeBound = true;
+    window.addEventListener('resize', function() {
+      document.querySelectorAll('.custom-select.is-open').forEach(function(node) {
+        var wrapper = node as HTMLElement
+        var trigger = wrapper.querySelector('.custom-select-trigger') as HTMLElement | null
+        var panel = wrapper.querySelector('.custom-select-panel') as HTMLElement | null
+        if (!trigger || !panel) return
+        positionDropdownPanel(panel, trigger)
+      })
+    })
   }
 }
 

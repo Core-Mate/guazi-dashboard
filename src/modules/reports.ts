@@ -7,6 +7,9 @@ let currentReportDim = 'week'
 let roiPlatformChart = null
 let currentReportSwitchRequestId = 0
 let currentReportPreviewUrl = ''
+let currentReportGenerationRequestId = 0
+
+const REPORT_SAVE_BUTTON_HTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 保存图片'
 
 function wait(ms: number) {
   return new Promise<void>(function(resolve) {
@@ -25,6 +28,92 @@ function revokeReportPreviewUrl() {
   if (!currentReportPreviewUrl) return
   URL.revokeObjectURL(currentReportPreviewUrl)
   currentReportPreviewUrl = ''
+}
+
+function getReportOverlay(): HTMLElement | null {
+  return document.getElementById('reportOverlay') as HTMLElement | null
+}
+
+function getReportPanel(): HTMLElement | null {
+  return document.querySelector('#reportOverlay .report-container') as HTMLElement | null
+}
+
+function getReportBody(): HTMLElement | null {
+  return document.querySelector('#reportOverlay .report-body') as HTMLElement | null
+}
+
+function getReportPreviewImg(): HTMLImageElement | null {
+  return document.getElementById('reportPreviewImg') as HTMLImageElement | null
+}
+
+function getReportSaveBtn(): HTMLButtonElement | null {
+  return document.getElementById('reportSaveBtn') as HTMLButtonElement | null
+}
+
+function resetReportPreviewState() {
+  var panel = getReportPanel()
+  var reportBody = getReportBody()
+  var previewImg = getReportPreviewImg()
+  var saveBtn = getReportSaveBtn()
+
+  currentReportBlob = null
+
+  if (panel) panel.classList.remove('report-panel')
+  if (reportBody) {
+    if (reportBody.id !== 'reportContent') reportBody.id = 'reportContent'
+    reportBody.classList.remove('report-content-enter')
+    reportBody.scrollTop = 0
+    reportBody.querySelectorAll('.report-loading-overlay').forEach(function(node) { node.remove() })
+  }
+  if (saveBtn) {
+    saveBtn.innerHTML = REPORT_SAVE_BUTTON_HTML
+    saveBtn.disabled = false
+  }
+  if (previewImg) {
+    previewImg.removeAttribute('src')
+    previewImg.alt = getReportLabel(currentReportDim) + '预览'
+  }
+
+  revokeReportPreviewUrl()
+}
+
+function forceCloseReportPreview(options?: { cancelSwitchRequest?: boolean }) {
+  var overlay = getReportOverlay()
+  if (overlay) overlay.classList.remove('open')
+  if (options?.cancelSwitchRequest !== false) currentReportSwitchRequestId += 1
+  resetReportPreviewState()
+}
+
+function openReportPreview(blob: Blob) {
+  forceCloseReportPreview({ cancelSwitchRequest: false })
+
+  currentReportBlob = blob
+
+  var url = URL.createObjectURL(blob)
+  currentReportPreviewUrl = url
+
+  var overlay = getReportOverlay()
+  var panel = getReportPanel()
+  var reportBody = getReportBody()
+  var previewImg = getReportPreviewImg()
+
+  if (previewImg) {
+    previewImg.src = url
+    previewImg.alt = getReportLabel(currentReportDim) + '预览'
+  }
+  if (panel) {
+    panel.classList.remove('report-panel')
+    void panel.offsetHeight
+    panel.classList.add('report-panel')
+  }
+  if (reportBody) {
+    if (reportBody.id !== 'reportContent') reportBody.id = 'reportContent'
+    reportBody.scrollTop = 0
+    reportBody.classList.remove('report-content-enter')
+    void reportBody.offsetHeight
+    reportBody.classList.add('report-content-enter')
+  }
+  if (overlay) overlay.classList.add('open')
 }
 
 function getReportLabel(dim: string): string {
@@ -801,6 +890,8 @@ async function buildReportHTML(dim) {
 export async function generateReport() {
   var btn = document.getElementById('reportFab') as HTMLButtonElement | null;
   if (!btn) return;
+  var requestId = ++currentReportGenerationRequestId
+  forceCloseReportPreview()
   btn.classList.add('loading');
   btn.disabled = true;
   try {
@@ -821,23 +912,10 @@ export async function generateReport() {
         reject(new Error('生成图片失败'));
       }, 'image/png');
     });
-    currentReportBlob = blob;
-    revokeReportPreviewUrl()
-    var url = URL.createObjectURL(blob);
-    currentReportPreviewUrl = url
-    var previewImg = document.getElementById('reportPreviewImg') as HTMLImageElement | null;
-    if (previewImg) previewImg.src = url;
-    var overlay = document.getElementById('reportOverlay');
-    if (overlay) overlay.classList.add('open');
-    var panel = document.querySelector('#reportOverlay .report-container') as HTMLElement | null;
-    if (panel) {
-      panel.classList.remove('report-panel');
-      void panel.offsetHeight;
-      panel.classList.add('report-panel');
-    }
-    var wrap = document.querySelector('#reportOverlay .report-body') as HTMLElement | null;
-    if (wrap && wrap.id !== 'reportContent') wrap.id = 'reportContent';
+    if (requestId !== currentReportGenerationRequestId) return
+    openReportPreview(blob)
   } catch(e) {
+    if (requestId !== currentReportGenerationRequestId) return
     var message = e instanceof Error ? e.message : String(e);
     alert('生成失败：' + message);
   } finally {
@@ -847,10 +925,8 @@ export async function generateReport() {
 }
 
 export function closeReportPreview() {
-  document.getElementById('reportOverlay').classList.remove('open');
-  var previewImg = document.getElementById('reportPreviewImg') as HTMLImageElement | null;
-  if (previewImg) previewImg.src = ''
-  revokeReportPreviewUrl()
+  currentReportGenerationRequestId += 1
+  forceCloseReportPreview()
 }
 
 export function saveReportImage() {
@@ -917,7 +993,7 @@ export async function switchReportDim(dim, btn) {
     currentReportPreviewUrl = url
     var previewImg = document.getElementById('reportPreviewImg') as HTMLImageElement | null;
     if (previewImg) previewImg.src = url;
-    saveBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 保存图片';
+    saveBtn.innerHTML = REPORT_SAVE_BUTTON_HTML;
     var wrap = reportBody;
     if (wrap.id !== 'reportContent') wrap.id = 'reportContent';
     wrap = document.getElementById('reportContent');

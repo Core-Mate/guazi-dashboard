@@ -887,6 +887,13 @@
     display: flex;
     flex-direction: column;
   }
+  .custom-select-panel,
+  .custom-dropdown-panel,
+  [class*='dropdown-panel'],
+  [class*='dropdownPanel'] {
+    max-width: calc(100vw - 16px);
+    overflow-x: hidden;
+  }
   .dropdown-search-wrap {
     padding: 8px;
     border-bottom: 1px solid #f4f4f5;
