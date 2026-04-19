@@ -3118,15 +3118,36 @@ async def _release_deleted_member_unique_fields(conn, user_id: int, phone_number
     )
 
 
-async def delete_member_with_conn(conn, user_id: int, tenant_id: int) -> None:
-    user = await conn.fetchrow(
-        'SELECT id, name FROM users WHERE id = $1 AND tenant_id = $2 AND NOT is_deleted',
-        user_id, tenant_id,
+async def _delete_member_and_release_unique_fields(conn, user_id: int, tenant_id: int):
+    deleted_phone, deleted_email, deleted_username = _deleted_member_tombstones(user_id, None)
+    return await conn.fetchrow(
+        """
+        UPDATE users
+        SET "phoneNumber" = $1,
+            email = $2,
+            username = CASE WHEN username IS NULL THEN NULL ELSE $3 END,
+            is_deleted = true,
+            is_active = false,
+            "updatedAt" = NOW()
+        WHERE id = $4
+          AND tenant_id = $5
+          AND NOT is_deleted
+        RETURNING id, name
+        """,
+        deleted_phone, deleted_email, deleted_username, user_id, tenant_id,
     )
-    if not user:
-        raise ValueError("user not found")
 
-    await _release_deleted_member_unique_fields(conn, user_id, None)
+
+async def delete_member_with_conn(conn, user_id: int, tenant_id: int) -> None:
+    user = await _delete_member_and_release_unique_fields(conn, user_id, tenant_id)
+    if not user:
+        existing_user = await conn.fetchval(
+            'SELECT 1 FROM users WHERE id = $1 AND tenant_id = $2',
+            user_id, tenant_id,
+        )
+        if not existing_user:
+            raise ValueError("user not found")
+        return
 
     await conn.execute(
         """
