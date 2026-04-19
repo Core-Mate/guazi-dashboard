@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 random.seed(42)
 
-
+# DO NOT run in production
 TENANT_CODE = "MOCK01"
 TENANT_NAME = "Mock测试租户"
 CN_TZ = timezone(timedelta(hours=8))

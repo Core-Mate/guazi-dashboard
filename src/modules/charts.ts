@@ -1421,8 +1421,8 @@ export function exportRidgelineCSV() {
     { label: '算力豆', keys: ['credits', 'cost'] },
   ];
   var headers = ['指标'].concat(labels);
-  var rows = metrics.map(function(metric) {
-    return [metric.label].concat(getRidgelineExportSeries(source, metric.keys, labels.length));
+  var rows: any[][] = metrics.map(function(metric) {
+    return ([metric.label] as any[]).concat(getRidgelineExportSeries(source, metric.keys, labels.length));
   });
   downloadCSV('ridgeline-' + new Date().toISOString().slice(0,10) + '.csv', headers, rows);
 }
