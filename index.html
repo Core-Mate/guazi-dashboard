@@ -139,8 +139,8 @@
       <span>本周消耗 <strong style="color:#09090b;" id="statCost">470</strong> 算力豆，日均 <span id="costAvg">67</span> 算力豆</span>
     </div>
 
-    <div class="card">
-      <div class="card-header"><div><div class="card-title">完成趋势</div><div class="card-desc" id="opsTrendDesc">多维度数据对比</div></div><div style="display:flex;gap:6px;"><button class="btn-export-sm" onclick="exportTrendCSV()" title="导出CSV">导出 CSV</button><button class="btn-export-sm" onclick="exportTrendPNG()" title="导出图片">导出 PNG</button></div></div>
+    <div class="card report-chart-card">
+      <div class="card-header report-chart-header"><div><div class="card-title">完成趋势</div><div class="card-desc" id="opsTrendDesc">多维度数据对比</div></div><div class="report-export-actions"><button class="btn-export-sm" onclick="exportOpsCSV()" title="导出CSV">导出 CSV</button><button class="btn-export-sm" onclick="exportOpsPNG()" title="导出图片">导出 PNG</button></div></div>
       <div class="card-body">
         <div class="chart-toggles" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
           <label class="chart-toggle active" data-key="tasks"><span class="toggle-dot" style="background:#2563eb"></span> 完成 (次)</label>
@@ -156,7 +156,7 @@
           <button class="chart-view-btn active" data-view="2d">2D</button>
           <button class="chart-view-btn" data-view="ridge">脊线图</button>
         </div>
-        <div class="chart-container" style="height:200px;"><canvas id="opsTaskChart"></canvas></div>
+        <div class="report-chart-shell"><div class="chart-container report-chart-container" style="height:220px;"><canvas id="opsTaskChart"></canvas></div></div>
         <div id="opsRidgelineContainer" style="display:none;width:100%;min-height:440px;"></div>
       </div>
     </div>

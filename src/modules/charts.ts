@@ -1353,6 +1353,80 @@ export function exportTrendCSV() {
   downloadCSV('完成趋势_' + new Date().toISOString().slice(0,10) + '.csv', headers, rows);
 }
 
+function getCurrentOpsView() {
+  var activeViewBtn = document.querySelector('.chart-view-btn.active') as HTMLElement | null;
+  if (activeViewBtn && activeViewBtn.dataset.view === 'ridge') return 'ridgeline';
+  var ridgeCtn = document.getElementById('opsRidgelineContainer') as HTMLElement | null;
+  if (ridgeCtn && ridgeCtn.style.display !== 'none') return 'ridgeline';
+  return '2d';
+}
+
+function hasRidgelineExportData(source: any) {
+  if (!source) return false;
+  var labels = Array.isArray(source.labels) ? source.labels : (Array.isArray(source.dates) ? source.dates : []);
+  if (labels.length) return true;
+  return [
+    source.success,
+    source.runtime_h,
+    source.runtime,
+    source.comments,
+    source.likes,
+    source.saves,
+    source.dms,
+    source.reach,
+    source.credits,
+  ].some(function(series) {
+    return Array.isArray(series) && series.length > 0;
+  });
+}
+
+function getRidgelineExportSource() {
+  var snapTrend = (window as any).__lastSnap?.ops_trend;
+  if (hasRidgelineExportData(snapTrend)) return snapTrend;
+  if (hasRidgelineExportData(lastOpsData)) return lastOpsData;
+  return null;
+}
+
+function getRidgelineExportLabels(source: any) {
+  var rawLabels = Array.isArray(source?.labels) && source.labels.length
+    ? source.labels
+    : (Array.isArray(source?.dates) ? source.dates : []);
+  return rawLabels.map(function(label: any) {
+    return formatTrendLabel(label);
+  });
+}
+
+function getRidgelineExportSeries(source: any, keys: string[], pointCount: number) {
+  var values = getTrendValues(source, keys).slice(0, pointCount);
+  while (values.length < pointCount) values.push(0);
+  return values.map(function(value) {
+    var parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  });
+}
+
+export function exportRidgelineCSV() {
+  var source = getRidgelineExportSource();
+  if (!source) return;
+  var labels = getRidgelineExportLabels(source);
+  if (!labels.length) return;
+  var metrics = [
+    { label: '完成', keys: ['success'] },
+    { label: '运行时长', keys: ['runtime_h', 'runtime'] },
+    { label: '评论', keys: ['comments'] },
+    { label: '点赞', keys: ['likes'] },
+    { label: '收藏', keys: ['saves', 'favorites'] },
+    { label: '私信', keys: ['dms'] },
+    { label: '触达量', keys: ['reach'] },
+    { label: '算力豆', keys: ['credits', 'cost'] },
+  ];
+  var headers = ['指标'].concat(labels);
+  var rows = metrics.map(function(metric) {
+    return [metric.label].concat(getRidgelineExportSeries(source, metric.keys, labels.length));
+  });
+  downloadCSV('ridgeline-' + new Date().toISOString().slice(0,10) + '.csv', headers, rows);
+}
+
 export function exportTrendPNG() {
   if (!costChart) return;
   var url = costChart.toBase64Image('image/png', 1);
@@ -1362,6 +1436,86 @@ export function exportTrendPNG() {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
+}
+
+export async function exportRidgelinePNG(scale = 2) {
+  var svgEl = document.querySelector('#opsRidgelineContainer svg') as SVGSVGElement | null;
+  if (!svgEl) return;
+  var rect = svgEl.getBoundingClientRect();
+  var width = Math.max(
+    1,
+    Math.round(rect.width || svgEl.viewBox.baseVal.width || svgEl.clientWidth || 0)
+  );
+  var height = Math.max(
+    1,
+    Math.round(rect.height || svgEl.viewBox.baseVal.height || svgEl.clientHeight || 0)
+  );
+  var svgClone = svgEl.cloneNode(true) as SVGSVGElement;
+  if (!svgClone.getAttribute('xmlns')) svgClone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  if (!svgClone.getAttribute('xmlns:xlink')) svgClone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+  svgClone.setAttribute('width', String(width));
+  svgClone.setAttribute('height', String(height));
+  if (!svgClone.getAttribute('viewBox')) svgClone.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
+
+  var svgStr = new XMLSerializer().serializeToString(svgClone);
+  var img = new Image();
+  var blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
+  var url = URL.createObjectURL(blob);
+
+  try {
+    await new Promise(function(resolve, reject) {
+      img.onload = resolve;
+      img.onerror = reject;
+      img.src = url;
+    });
+
+    var canvas = document.createElement('canvas');
+    canvas.width = width * scale;
+    canvas.height = height * scale;
+    var ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+    await new Promise<void>(function(resolve) {
+      canvas.toBlob(function(nextBlob) {
+        if (!nextBlob) {
+          resolve();
+          return;
+        }
+        var downloadUrl = URL.createObjectURL(nextBlob);
+        var a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = 'ridgeline-' + new Date().toISOString().slice(0,10) + '.png';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(downloadUrl);
+        resolve();
+      }, 'image/png');
+    });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+export function exportOpsCSV() {
+  if (getCurrentOpsView() === 'ridgeline') {
+    exportRidgelineCSV();
+    return;
+  }
+  exportTrendCSV();
+}
+
+export function exportOpsPNG() {
+  if (getCurrentOpsView() === 'ridgeline') {
+    void exportRidgelinePNG(2);
+    return;
+  }
+  exportTrendPNG();
 }
 
 export function bindHighlightReflow(): void {

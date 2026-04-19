@@ -5,7 +5,7 @@ import './styles/index.css'
 import './styles/transitions.css'
 
 // Module imports
-import { createCharts, ensureOpsCharts, updateCharts, renderHighlightCards, createDonutChart, createInteractionDonut, setCurrentRange, exportTrendCSV, exportTrendPNG, bindHighlightReflow } from './modules/charts'
+import { createCharts, ensureOpsCharts, updateCharts, renderHighlightCards, createDonutChart, createInteractionDonut, setCurrentRange, exportTrendCSV, exportTrendPNG, exportRidgelineCSV, exportRidgelinePNG, exportOpsCSV, exportOpsPNG, bindHighlightReflow } from './modules/charts'
 import { switchPage, switchDashTab, switchEnterpriseTab, switchEntCard, switchOpsView } from './modules/navigation'
 import { setRange, openDatePickerModal, setDatePreset, applyCustomRange, renderCalendar, calSelectDate, calPreset, calPrevMonth, calNextMonth, calApply } from './modules/date-range'
 import { renderScenarioCards, renderScenarioCardsFull, toggleScenario, toggleScenarioFull, initScenarioDropdown, flipScenario, exportScenarioCSV, sortScenario, searchScenario, renderSkillGroupsFromAggs } from './modules/scenarios'
@@ -180,7 +180,7 @@ Object.assign(window, {
   renderScenarioCards, renderScenarioCardsFull, toggleScenario, toggleScenarioFull, initScenarioDropdown, flipScenario, exportScenarioCSV, sortScenario, searchScenario,
   renderDeviceMonitor, toggleDeviceSection, updateDeviceBadge, renderDeviceMetricsTable, searchDevice, exportDeviceCSV,
   renderAchievements, tiltAchieve, resetAchieve,
-  createCharts, ensureOpsCharts, updateCharts, renderHighlightCards, createDonutChart, createInteractionDonut, setCurrentRange, exportTrendCSV, exportTrendPNG,
+  createCharts, ensureOpsCharts, updateCharts, renderHighlightCards, createDonutChart, createInteractionDonut, setCurrentRange, exportTrendCSV, exportTrendPNG, exportRidgelineCSV, exportRidgelinePNG, exportOpsCSV, exportOpsPNG,
   switchRecordTab, renderTransactions, renderOplog, changePageSize, goPage, exportTransactions, exportOplog, paginationState, renderRecordTab, sortTransactions, sortOplog,
   openDrawer, closeDrawer, switchDrawerTab,
   openModal, closeModal, showToast,
