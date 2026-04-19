@@ -82,6 +82,12 @@ import auth
 from auth import require_api_key
 import db
 
+_cors_env = os.getenv('CORS_ORIGINS', '').strip()
+if _cors_env:
+    CORS_ALLOWED = [o.strip() for o in _cors_env.split(',') if o.strip()]
+else:
+    CORS_ALLOWED = ['*']
+
 _EXPLORE_ENABLED = os.getenv("ENABLE_EXPLORE", "").lower() in ("1", "true", "yes")
 
 try:
@@ -335,9 +341,10 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=CORS_ALLOWED,
+    allow_credentials=True if CORS_ALLOWED != ['*'] else False,
+    allow_methods=['*'],
+    allow_headers=['*'],
 )
 
 
