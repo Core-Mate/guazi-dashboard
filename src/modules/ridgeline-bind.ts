@@ -19,18 +19,71 @@ function delay(ms: number) {
 
 async function switchOpsChartView(oldView: HTMLElement, newView: HTMLElement, newViewDisplay = '') {
   if (oldView === newView) return
-  oldView.classList.remove('entering')
-  oldView.classList.add('leaving')
-  await delay(220)
-  oldView.style.display = 'none'
-  oldView.classList.remove('leaving', 'entered')
-  newView.style.display = newViewDisplay
-  newView.classList.remove('leaving')
-  newView.classList.add('ops-view-swap', 'entering')
+
+  document.dispatchEvent(new MouseEvent('mouseup'))
+
+  const stage = oldView.parentElement === newView.parentElement
+    ? (oldView.parentElement as HTMLElement | null)
+    : null
+  const views = [oldView, newView]
+  const getViewKey = (view: HTMLElement) => view.id || (view === newView ? 'next' : 'current')
+  const getVisibleView = () => {
+    const activeKey = stage?.dataset.opsActiveView
+    if (activeKey) {
+      const activeView = views.find((view) => getViewKey(view) === activeKey)
+      if (activeView) return activeView
+    }
+    const enteredView = views.find((view) => view.style.display !== 'none' && view.classList.contains('entered'))
+    if (enteredView) return enteredView
+    return views.find((view) => view.style.display !== 'none') || oldView
+  }
+
+  const from = getVisibleView()
+  const to = newView
+  if (from === to) return
+
+  if (stage) {
+    stage.dataset.opsActiveView = getViewKey(to)
+  }
+
+  to.classList.remove('leaving', 'entered')
+  to.classList.add('entering')
+  to.style.display = newViewDisplay || ''
+
+  if (stage) {
+    const fromHeight = from.offsetHeight || stage.offsetHeight || 280
+    const toHeight = to.offsetHeight || fromHeight
+    stage.style.height = Math.max(fromHeight, toHeight, 280) + 'px'
+  }
+
+  void to.offsetWidth
+
   requestAnimationFrame(() => {
-    newView.classList.remove('entering')
-    newView.classList.add('entered')
+    from.classList.add('leaving')
+    from.classList.remove('entering', 'entered')
+    to.classList.remove('entering')
+    to.classList.add('entered')
   })
+
+  await delay(340)
+
+  if (getVisibleView() === to) {
+    from.style.display = 'none'
+    from.classList.remove('leaving')
+    if (stage) {
+      stage.style.height = Math.max(to.offsetHeight || 0, 280) + 'px'
+    }
+  }
+
+  if (to.id === 'opsRidgelineContainer') {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve())
+    })
+    refreshRidgeline((window as any).__lastSnap)
+    if (stage && getVisibleView() === to) {
+      stage.style.height = Math.max(to.offsetHeight || 0, 280) + 'px'
+    }
+  }
 }
 
 function buildRidgelineSeries(snap: any): { labels: string[]; seriesList: RidgelineSeries[] } {

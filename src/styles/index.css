@@ -1933,7 +1933,18 @@ button.btn-loading::before {
   border-radius: 6px;
   cursor: pointer;
   color: #52525b;
-  transition: all 0.15s ease;
+}
+
+.chart-view-toggle button {
+  transition:
+    background 0.24s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.24s cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 0.24s ease,
+    transform 0.18s ease;
+}
+
+.chart-view-toggle button:active {
+  transform: scale(0.96);
 }
 
 .chart-view-btn:hover {
@@ -1946,29 +1957,45 @@ button.btn-loading::before {
   border-color: #0f172a;
 }
 
+.ops-chart-stage {
+  position: relative;
+  min-height: 280px;
+}
+
+.ops-chart-stage > .ops-view-swap {
+  position: absolute;
+  inset: 0;
+}
+
 #opsRidgelineContainer {
   background: #0a0a12;
   border-radius: 10px;
 }
 
 .ops-view-swap {
-  transition: opacity 0.22s ease, transform 0.22s ease;
+  transition:
+    opacity 0.32s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.32s cubic-bezier(0.16, 1, 0.3, 1),
+    filter 0.32s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .ops-view-swap.leaving {
   opacity: 0;
-  transform: translateY(4px);
+  transform: translateY(6px) scale(0.985);
+  filter: blur(2px);
   pointer-events: none;
 }
 
 .ops-view-swap.entering {
   opacity: 0;
-  transform: translateY(-4px);
+  transform: translateY(-6px) scale(0.985);
+  filter: blur(2px);
 }
 
 .ops-view-swap.entered {
   opacity: 1;
-  transform: translateY(0);
+  transform: translateY(0) scale(1);
+  filter: blur(0);
 }
 
 .report-body {

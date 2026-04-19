@@ -156,8 +156,12 @@
           <button class="chart-view-btn active" data-view="2d">2D</button>
           <button class="chart-view-btn" data-view="ridge">脊线图</button>
         </div>
-        <div class="report-chart-shell"><div class="chart-container report-chart-container" style="height:220px;"><canvas id="opsTaskChart"></canvas></div></div>
-        <div id="opsRidgelineContainer" style="display:none;width:100%;min-height:440px;"></div>
+        <div class="report-chart-shell">
+          <div class="ops-chart-stage">
+            <div class="chart-container report-chart-container ops-view-swap" style="height:220px;"><canvas id="opsTaskChart"></canvas></div>
+            <div id="opsRidgelineContainer" class="ops-view-swap" style="display:none;width:100%;min-height:440px;"></div>
+          </div>
+        </div>
       </div>
     </div>
 
