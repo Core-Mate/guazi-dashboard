@@ -35,6 +35,9 @@ if pids="$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null)" && [[ -n "$pids" ]]; t
   fi
 fi
 
+if [[ "${E2E_CHROME_CLEAN_PROFILE:-1}" == "1" ]]; then
+  rm -rf "$PROFILE_DIR"
+fi
 mkdir -p "$PROFILE_DIR"
 rm -f "$LOG_PATH"
 
