@@ -15,10 +15,10 @@ Task:
 3. Switch pagination forward and backward, and verify the table rows update consistently with the page indicator.
 4. Use the search box to filter table rows, and verify that the visible results change in a way that matches the query.
 5. Clear or adjust the search query and confirm the table resets cleanly without stale filtered rows.
-6. Switch the viewport to 390px width and evaluate whether the content area remains usable; explicitly note if the previous 404px-too-tight risk still appears.
-7. Switch the viewport to 430px width and compare whether layout density, clipping, and horizontal overflow improve or regress.
-8. Switch the viewport to 800px width and verify the iPad-sized layout preserves table usability, chart readability, and basic interaction access.
-9. Switch the viewport to 1440px width and verify the desktop layout does not leave broken spacing, oversized gaps, or clipped controls.
+6. Under 390px, 430px, and 800px viewports, perform horizontal-scroll reachability validation: use `getComputedStyle` to inspect whether `document.body` or the primary dashboard scroll container exposes `overflow-x: auto` or `overflow-x: scroll`; simulate horizontal scrolling with `window.scrollTo(2000, 0)` or a large `scrollLeft` on the active scroll container; verify that previously clipped right-side content becomes reachable (such as rightmost table columns, trailing KPI card content, or the chart right edge); capture `viewport-390-scrolled-right.png`, `viewport-430-scrolled-right.png`, and `viewport-800-scrolled-right.png`.
+7. Switch the viewport to 1440px width, and optionally 1920px if time budget allows, to perform desktop no-regression validation: verify that 1440px does not show a horizontal scrollbar, KPI rows do not wrap, and charts are not compressed; capture `viewport-1440-no-regression.png`.
+8. Read the dashboard main container `min-width` value (expect approximately 1280px or the intended design width), then validate min-width reasonableness by confirming that a 1280px viewport does not trigger horizontal scrolling while a 1200px viewport may legitimately do so; capture `viewport-1280-edge.png`.
+9. Apply the responsive verdict criteria explicitly: mark `🔴 bug` if a viewport narrower than the container `min-width` cannot horizontally reach all content; mark `🟢 ok` if narrower viewports can horizontally reach all content and desktop widths at or above 1440px show no regression; mark `🟡 warning` if horizontal scrolling exists but feels visually awkward (for example misplaced scrollbar position or abnormal scrollbar height).
 10. If permission thresholds or permission-gated indicators are visible in the dashboard, verify whether threshold states render clearly and consistently across the tested viewports.
 11. Check the console for JavaScript errors triggered by pagination, search filtering, or viewport changes.
 12. Write findings to `$REPORT_DIR/exploratory.md` grouped by pagination, search, responsive behavior, and permission-threshold behavior if present.
@@ -35,9 +35,9 @@ Task:
 - 等待策略：点击或输入后先等待 500ms，再检查 DOM 是否稳定；如有 loading 态，可延长到 2 秒确认是否只是异步刷新
 
 ### 响应式切换类
-- 适用对象：390px / 430px / 800px / 1440px viewport 切换
-- 预期副作用：布局重排、滚动行为、控件可达性变化
-- 等待策略：每次切换 viewport 后等待 500ms，再检查 overflow、裁切、重叠和触达性
+- 适用对象：390px / 430px / 800px / 1200px / 1280px / 1440px（可选 1920px）viewport 切换，以及横向滚动可达性检查
+- 预期副作用：布局重排、横向滚动行为、`min-width` 边界表现、控件可达性变化
+- 等待策略：每次切换 viewport 后等待 500ms，再检查 overflow、裁切、重叠和触达性；触发横向滚动后再等待 300ms，再确认右侧内容是否真正可见并截图
 
 ### 权限阈值 / 状态展示类
 - 适用对象：permission thresholds 或 permission-gated indicators（如果页面存在）
@@ -45,10 +45,10 @@ Task:
 - 等待策略：仅在该区域实际存在时检查，避免为不存在的模块误报
 
 ## 判定无反应的准则（升级）
-1. 先识别交互类型（pagination / search / viewport / permission threshold）。
-2. 应用上面的等待策略。
-3. 超时后仍无预期副作用，再判 bug。
-4. 在 report 里写明：等待了多少秒、检查了什么副作用、最终为什么仍判定失败；不要只写“没反应”。
+- 先识别交互类型（pagination / search / viewport / permission threshold）。
+- 应用上面的等待策略。
+- 超时后仍无预期副作用，再判 bug。
+- 在 report 里写明：等待了多少秒、检查了什么副作用、最终为什么仍判定失败；不要只写“没反应”。
 
 Output requirements:
 - Create or overwrite `$REPORT_DIR/exploratory.md`.
