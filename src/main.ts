@@ -22,7 +22,7 @@ import { initCustomDropdowns, rebuildCustomDropdown } from './modules/dropdown'
 import { showLoader, hideLoader } from './modules/loader'
 import { bindRidgelineToggle, refreshRidgeline } from './modules/ridgeline-bind'
 import { pTag, initFilters, renderTaskTable, animateAllNumbers, getToday, getStatNum, setStatNum, prependTransaction, formatCompareText } from './modules/utils'
-import { applyMembersData, applyWalletData, fetchDashboardData, applyBetaOverlays, clearDashboardSnapshotCache, normalizeTransactions, normalizeAuditLog } from './modules/api-integration'
+import { applyMembersData, applyWalletData, fetchDashboardData, applyBetaOverlays, clearDashboardSnapshotCache, normalizeTransactions, normalizeAuditLog, showDashboardError } from './modules/api-integration'
 import { PLATFORM_BREAKDOWN } from './data/platforms'
 import { INTERACTION_BREAKDOWN } from './data/charts'
 
@@ -32,6 +32,8 @@ var dashboardViewState: { range: string; custom?: DashboardCustomRange } = {
   range: '7d',
   custom: undefined,
 }
+var runtimeErrorGuardInstalled = false
+var runtimeErrorNotified = false
 
 function setText(id: string, value: string) {
   var el = document.getElementById(id)
@@ -129,6 +131,30 @@ function applyMiniStatsRow(exec: string, runtime: string, cost: string) {
   miniExec.textContent = exec
   miniRuntime.textContent = runtime
   miniCost.textContent = cost
+}
+
+function surfaceRuntimeError(prefix: string, error?: unknown) {
+  hideLoader()
+  var detail = error instanceof Error
+    ? error.message
+    : String(error || '').trim()
+  var message = prefix + (detail ? '：' + detail : '')
+  showDashboardError(message)
+  if (!runtimeErrorNotified) {
+    runtimeErrorNotified = true
+    showToast(message, 'error')
+  }
+}
+
+function installRuntimeErrorHandlers() {
+  if (runtimeErrorGuardInstalled) return
+  runtimeErrorGuardInstalled = true
+  window.addEventListener('error', function(event) {
+    surfaceRuntimeError('页面运行异常', event.error || event.message)
+  })
+  window.addEventListener('unhandledrejection', function(event) {
+    surfaceRuntimeError('页面运行异常', event.reason)
+  })
 }
 
 function getCompareLabelForRange(range?: string): string {
@@ -274,6 +300,8 @@ document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') { closeDrawer(); closeReportPreview(); }
 })
 
+installRuntimeErrorHandlers()
+
 // Init
 document.addEventListener('DOMContentLoaded', async function() {
   showLoader({ immediate: true })
@@ -284,33 +312,37 @@ document.addEventListener('DOMContentLoaded', async function() {
     var el = document.getElementById('globalLoader')
     if (el && !el.classList.contains('hidden')) el.classList.add('hidden')
   }, 4000);
-  initROICard();
-  renderROIPlatformCard();
-  createCharts();
-  if (document.getElementById('scenarioDropdown')) initScenarioDropdown();
-  if (document.getElementById('scenarioCards')) renderScenarioCards();
-  renderDeviceMonitor();
-  renderAccountMetricsTable();
-  updateDeviceBadge();
-  initFilters();
-  renderMembers();
-  var memberSearch = document.getElementById('entMemberSearch');
-  if (memberSearch) {
-    memberSearch.addEventListener('input', function() { renderMembers((this as HTMLInputElement).value); });
+  try {
+    initROICard();
+    renderROIPlatformCard();
+    createCharts();
+    if (document.getElementById('scenarioDropdown')) initScenarioDropdown();
+    if (document.getElementById('scenarioCards')) renderScenarioCards();
+    renderDeviceMonitor();
+    renderAccountMetricsTable();
+    updateDeviceBadge();
+    initFilters();
+    renderMembers();
+    var memberSearch = document.getElementById('entMemberSearch');
+    if (memberSearch) {
+      memberSearch.addEventListener('input', function() { renderMembers((this as HTMLInputElement).value); });
+    }
+    initCustomDropdowns();
+
+    // Preloader: await all live data before revealing content
+    await bootDashboardSnapshot(initialRange);
+
+    bindHighlightReflow();
+    bindRidgelineToggle();
+    animateAllNumbers();
+  } catch (error) {
+    surfaceRuntimeError('页面初始化失败', error)
+  } finally {
+    // Force-hide preloader regardless of pendingCount balance
+    // (some setRange/boot paths can drift the counter; for the initial
+    // boot we want a hard guarantee the overlay goes away)
+    var __loaderEl = document.getElementById('globalLoader');
+    if (__loaderEl) __loaderEl.classList.add('hidden');
+    hideLoader();
   }
-  initCustomDropdowns();
-
-  // Preloader: await all live data before revealing content
-  await bootDashboardSnapshot(initialRange);
-
-  bindHighlightReflow();
-
-  // Force-hide preloader regardless of pendingCount balance
-  // (some setRange/boot paths can drift the counter; for the initial
-  // boot we want a hard guarantee the overlay goes away)
-  var __loaderEl = document.getElementById('globalLoader');
-  if (__loaderEl) __loaderEl.classList.add('hidden');
-  hideLoader();
-  bindRidgelineToggle();
-  animateAllNumbers();
 })

@@ -4,7 +4,7 @@ import { fetchTaskSummaries } from './api-integration'
 
 var taskRowsCache: any[] = []
 
-function escapeHtml(value) {
+export function escapeHtml(value) {
   return String(value == null ? '' : value)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -22,7 +22,7 @@ function parseTaskPlatforms(value: any) {
 
 export function pTag(name) {
   const cls = platformMap[name] || 'tag-default';
-  return `<span class="tag ${cls}">${name}</span>`;
+  return `<span class="tag ${cls}">${escapeHtml(name)}</span>`;
 }
 
 export function initFilters() {

@@ -1,3 +1,4 @@
+import hmac
 import logging
 import os
 from pathlib import Path
@@ -38,6 +39,13 @@ _load_keys()
 OPEN_PATHS = frozenset()
 
 
+def _resolve_tenant_id(api_key: str):
+    for candidate_key, tenant_id in API_KEYS.items():
+        if hmac.compare_digest(api_key, candidate_key):
+            return tenant_id
+    return None
+
+
 async def require_api_key(request: Request) -> int:
     if request.url.path in OPEN_PATHS:
         return 1
@@ -53,7 +61,7 @@ async def require_api_key(request: Request) -> int:
         )
         raise HTTPException(status_code=401, detail="Missing X-API-Key header")
 
-    tenant_id = API_KEYS.get(api_key)
+    tenant_id = _resolve_tenant_id(api_key)
     if tenant_id is None:
         logger.error(
             "HTTPException path=%s api_key_present=%s tenant_id=%s detail=%s",

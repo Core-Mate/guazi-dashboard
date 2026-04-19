@@ -182,15 +182,20 @@ async def _refill_hot_caches() -> None:
                     range_value,
                 )
     elapsed = time.perf_counter() - started_at
-    print(f"[hot-cache-tick] refilled {len(ranges)} ranges × {len(tenants)} tenants in {elapsed:.1f}s")
+    logger.info(
+        "Dashboard hot cache refill completed in %.1fs for %s ranges x %s tenants",
+        elapsed,
+        len(ranges),
+        len(tenants),
+    )
 
 
 async def _hot_cache_tick_loop(interval_seconds: int = 60):
     while True:
         try:
             await _refill_hot_caches()
-        except Exception as e:
-            print(f"[hot-cache-tick] refill failed: {e}")
+        except Exception:
+            logger.exception("Dashboard hot cache refill failed")
         await asyncio.sleep(interval_seconds)
 
 
@@ -212,6 +217,8 @@ async def lifespan(app: FastAPI):
         tick_task.cancel()
         warmup_task.cancel()
         with suppress(asyncio.CancelledError):
+            await tick_task
+        with suppress(asyncio.CancelledError):
             await warmup_task
         await db.close_pool()
 
@@ -223,6 +230,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
+
+@app.get("/ready")
+async def readiness_check():
+    try:
+        pool = await db.get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("SELECT 1")
+        return {"status": "ready"}
+    except (RuntimeError, asyncpg.PostgresError) as exc:
+        logger.exception(
+            "Dashboard readiness check failed",
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+        return JSONResponse(status_code=503, content={"status": "not ready"})
 
 _ALLOWED_MEMBER_ROLES = {"admin", "member", "user"}
 _MAX_MEMBER_TEXT_LENGTH = 128

@@ -110,6 +110,8 @@ export interface DashboardSnapshot {
 }
 
 var SNAPSHOT_CACHE_TTL = 30000;
+var DASHBOARD_API_TIMEOUT_MS = 10000;
+var DASHBOARD_DETAIL_TIMEOUT_MS = 8000;
 var snapshotCache: Record<string, { expiresAt: number; data?: DashboardSnapshot; pending?: Promise<DashboardSnapshot> }> = {};
 var MISSING_API_KEY_MESSAGE = '未配置 API Key，请联系管理员';
 var API_KEY_WARNING_FLAG = '__dashboardApiKeyMissingWarned__';
@@ -194,6 +196,31 @@ export const EMPTY_SNAPSHOT: DashboardSnapshot = {
     total: 0,
   },
 };
+
+function withRequestTimeout(timeoutMs: number) {
+  if (typeof AbortController === 'undefined' || timeoutMs <= 0) {
+    return {
+      signal: undefined as AbortSignal | undefined,
+      clear: function() {},
+      didTimeout: function() { return false },
+    }
+  }
+  var controller = new AbortController()
+  var timedOut = false
+  var timer = window.setTimeout(function() {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
+  return {
+    signal: controller.signal,
+    clear: function() {
+      window.clearTimeout(timer)
+    },
+    didTimeout: function() {
+      return timedOut
+    },
+  }
+}
 
 function cloneSnapshot(snapshot: DashboardSnapshot): DashboardSnapshot {
   return JSON.parse(JSON.stringify(snapshot));
@@ -336,9 +363,11 @@ async function fetchDashboardJSON<T>(
     showDashboardError(errorPrefix + '：' + MISSING_API_KEY_MESSAGE)
     return null
   }
+  var timeout = withRequestTimeout(DASHBOARD_API_TIMEOUT_MS)
   try {
     var resp = await fetch(buildDashboardUrl(path, query, tenantId), {
       headers: headers,
+      signal: timeout.signal,
     })
     if (!resp.ok) {
       var msg = 'HTTP ' + resp.status
@@ -353,8 +382,10 @@ async function fetchDashboardJSON<T>(
     clearDashboardError()
     return await resp.json()
   } catch {
-    showDashboardError(errorPrefix + '：网络错误')
+    showDashboardError(errorPrefix + '：' + (timeout.didTimeout() ? '请求超时' : '网络错误'))
     return null
+  } finally {
+    timeout.clear()
   }
 }
 
@@ -590,26 +621,54 @@ export async function fetchAccountWeekSummary(accountId: string, tenantId: strin
   var headers = getDashboardApiHeaders()
   if (!headers) throw new Error(MISSING_API_KEY_MESSAGE)
   var url = buildDashboardUrl('/api/accounts/' + encodeURIComponent(accountId) + '/week-summary', undefined, tenantId)
-  var resp = await fetch(url, {
-    headers: headers,
-  })
-  if (!resp.ok) {
-    throw new Error('HTTP ' + resp.status)
+  var timeout = withRequestTimeout(DASHBOARD_DETAIL_TIMEOUT_MS)
+  try {
+    var resp = await fetch(url, {
+      headers: headers,
+      signal: timeout.signal,
+    })
+    if (!resp.ok) {
+      var msg = 'HTTP ' + resp.status
+      try {
+        var body = await resp.json()
+        msg = body.detail || body.error || msg
+      } catch {}
+      throw new Error(msg)
+    }
+    return await resp.json()
+  } catch (error) {
+    if (timeout.didTimeout()) throw new Error('请求超时')
+    throw error
+  } finally {
+    timeout.clear()
   }
-  return await resp.json()
 }
 
 export async function fetchTaskWeekSummary(taskId: string): Promise<TaskWeekSummary> {
   var headers = getDashboardApiHeaders()
   if (!headers) throw new Error(MISSING_API_KEY_MESSAGE)
   var url = buildDashboardUrl('/api/tasks/' + encodeURIComponent(taskId) + '/week-summary')
-  var resp = await fetch(url, {
-    headers: headers,
-  })
-  if (!resp.ok) {
-    throw new Error('HTTP ' + resp.status)
+  var timeout = withRequestTimeout(DASHBOARD_DETAIL_TIMEOUT_MS)
+  try {
+    var resp = await fetch(url, {
+      headers: headers,
+      signal: timeout.signal,
+    })
+    if (!resp.ok) {
+      var msg = 'HTTP ' + resp.status
+      try {
+        var body = await resp.json()
+        msg = body.detail || body.error || msg
+      } catch {}
+      throw new Error(msg)
+    }
+    return await resp.json()
+  } catch (error) {
+    if (timeout.didTimeout()) throw new Error('请求超时')
+    throw error
+  } finally {
+    timeout.clear()
   }
-  return await resp.json()
 }
 
 export async function tryLiveHighlights(range: string) {

@@ -2,6 +2,7 @@ import { membersData } from '../data/members'
 import { openModal, closeModal, showToast } from './modal-toast'
 import { apiAddMember, apiUpdateMember, apiDeleteMember, apiDistributeCredits } from '../data/api'
 import { refreshDashboard } from '../main'
+import { escapeHtml } from './utils'
 
 function startLoading(label?: string) {
   var btn = document.querySelector('#modalFooter .modal-btn:not(.modal-btn-cancel)') as HTMLButtonElement;
@@ -117,7 +118,7 @@ export function renderMembers(filter?) {
     var actions = isPrimaryAdmin ? '—' :
       '<button class="btn-sm" onclick="openManageMemberModal('+m.id+')">管理</button>' +
       '<button class="btn-sm-danger" onclick="confirmRemoveMember('+m.id+')">移除</button>';
-    return '<tr>'+selectCell+'<td class="td-bold">'+m.name+'</td><td class="td-mono">'+m.phone+'</td><td>'+roleBadge+'</td><td class="td-mono">'+m.balance.toLocaleString()+'</td><td class="text-muted">'+m.joinDate+'</td><td>'+actions+'</td></tr>';
+    return '<tr>'+selectCell+'<td class="td-bold">'+escapeHtml(m.name)+'</td><td class="td-mono">'+escapeHtml(m.phone)+'</td><td>'+roleBadge+'</td><td class="td-mono">'+m.balance.toLocaleString()+'</td><td class="text-muted">'+escapeHtml(m.joinDate)+'</td><td>'+actions+'</td></tr>';
   }).join('');
   var allRows = tbody.querySelectorAll('tr') as any;
   allRows.forEach(function(row, i) {
@@ -157,8 +158,8 @@ export async function addMember() {
 export function openManageMemberModal(id) {
   var m = membersData.find(function(x) { return x.id === id; });
   if (!m) return;
-  var body = '<div class="modal-field"><label class="modal-label">姓名</label><input class="modal-input" id="mgName" value="'+m.name+'"></div>' +
-    '<div class="modal-field"><label class="modal-label">手机号</label><input class="modal-input" id="mgPhone" value="'+m.phone+'"></div>' +
+  var body = '<div class="modal-field"><label class="modal-label">姓名</label><input class="modal-input" id="mgName" value="'+escapeHtml(m.name)+'"></div>' +
+    '<div class="modal-field"><label class="modal-label">手机号</label><input class="modal-input" id="mgPhone" value="'+escapeHtml(m.phone)+'"></div>' +
     '<div class="modal-field"><label class="modal-label">角色</label><select class="modal-select" id="mgRole"><option value="member" '+(m.role==='member'?'selected':'')+'>成员</option><option value="admin" '+(m.role==='admin'?'selected':'')+'>管理员</option></select></div>' +
     '<div style="border-top:1px solid #e4e4e7;margin:16px 0;"></div>' +
     '<div style="font-size:13px;font-weight:600;color:#52525b;margin-bottom:12px;">算力豆管理</div>' +

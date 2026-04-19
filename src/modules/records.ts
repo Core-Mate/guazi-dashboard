@@ -5,7 +5,7 @@ import {
 import { membersData } from '../data/members'
 import { fetchAuditLog, fetchTransactions } from './api-integration'
 import { downloadCSV } from './export-utils'
-import { pTag, runWithButtonLoading } from './utils'
+import { escapeHtml, pTag, runWithButtonLoading } from './utils'
 
 export let paginationState = { transactions: {page:1,pageSize:20,dateStart:'',dateEnd:''}, oplog: {page:1,pageSize:20,dateStart:'',dateEnd:''} }
 export var txSortKey: 'time' | 'member' | 'type' = 'time'
@@ -82,7 +82,7 @@ function renderOplogBody(body, rows) {
     return
   }
   body.innerHTML = rows.map(function(item) {
-    return '<tr><td class="text-muted">' + item.time + '</td><td>' + item.operator + '</td><td>' + pTag(item.action) + '</td><td>' + item.target + '<span class="text-muted"> · ' + item.result + '</span></td></tr>'
+    return '<tr><td class="text-muted">' + escapeHtml(item.time) + '</td><td>' + escapeHtml(item.operator) + '</td><td>' + pTag(item.action) + '</td><td>' + escapeHtml(item.target) + '<span class="text-muted"> · ' + escapeHtml(item.result) + '</span></td></tr>'
   }).join('')
 }
 
@@ -92,7 +92,7 @@ function renderOverviewOplogBody(body, rows) {
     return
   }
   body.innerHTML = rows.map(function(item) {
-    return '<tr><td class="text-muted">' + item.time + '</td><td>' + item.operator + '</td><td>' + item.action + '</td><td>' + item.target + '<span class="text-muted"> · ' + item.result + '</span></td></tr>'
+    return '<tr><td class="text-muted">' + escapeHtml(item.time) + '</td><td>' + escapeHtml(item.operator) + '</td><td>' + escapeHtml(item.action) + '</td><td>' + escapeHtml(item.target) + '<span class="text-muted"> · ' + escapeHtml(item.result) + '</span></td></tr>'
   }).join('')
 }
 
@@ -402,7 +402,7 @@ function paintTransactions() {
   body.innerHTML = rows.map(function(item) {
     var changeClass = item.change > 0 ? 'text-green' : 'text-red'
     var changeText = item.change > 0 ? '+' + item.change.toLocaleString() : item.change.toLocaleString()
-    return '<tr><td class="text-muted">' + item.time + '</td><td>' + item.member + '</td><td>' + item.type + '</td><td>' + item.desc + '</td><td class="' + changeClass + '">' + changeText + '</td><td class="td-mono">' + item.balance.toLocaleString() + '</td></tr>'
+    return '<tr><td class="text-muted">' + escapeHtml(item.time) + '</td><td>' + escapeHtml(item.member) + '</td><td>' + escapeHtml(item.type) + '</td><td>' + escapeHtml(item.desc) + '</td><td class="' + changeClass + '">' + changeText + '</td><td class="td-mono">' + item.balance.toLocaleString() + '</td></tr>'
   }).join('')
   syncRecordSortHeaders('transactions', txSortKey, txSortDir)
   updatePagination('transactions', transactionState.total)

@@ -8,6 +8,13 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "e2e": "bash e2e/run.sh",
+    "e2e:api": "bash e2e/run.sh api-smoke",
+    "e2e:ui": "bash e2e/run.sh ui-smoke",
+    "e2e:visual": "bash e2e/run.sh visual",
+    "e2e:explore": "bash e2e/run.sh exploratory",
+    "e2e:pre-deploy": "bash e2e/run.sh pre-deploy",
+    "e2e:post-deploy": "bash e2e/run.sh post-deploy",
     "e2e:smoke": "bash e2e/run.sh"
   },
   "dependencies": {

@@ -1,6 +1,7 @@
 import { heatPlatforms, deviceHeat, deviceList, deviceMetrics } from '../data/devices'
 import { fmtHM } from '../data/helpers'
 import { downloadCSV } from './export-utils'
+import { escapeHtml } from './utils'
 
 var deviceSearchQuery = '';
 
@@ -20,7 +21,7 @@ export function renderDeviceMonitor() {
     el.innerHTML = '<div style="padding:24px 12px;text-align:center;color:#94a3b8;">暂无设备监控数据</div>';
     return;
   }
-  const head = `<tr><th>设备</th>${heatPlatforms.map(p=>`<th>${p}</th>`).join('')}<th>汇总</th></tr>`;
+  const head = `<tr><th>设备</th>${heatPlatforms.map(p=>`<th>${escapeHtml(p)}</th>`).join('')}<th>汇总</th></tr>`;
   const rows = deviceHeat.map(d => {
     let totalExec=0, totalFail=0;
     const cells = heatPlatforms.map(p => {
@@ -33,7 +34,7 @@ export function renderDeviceMonitor() {
     }).join('');
     const totR = totalExec>0 ? Math.round(totalFail/totalExec*100) : 0;
     const totCls = heatClass(totalExec, totalFail);
-    return `<tr><td>${d.id}<span class="col-device-label">${d.label}</span></td>${cells}<td><span class="heat-cell ${totCls}">${totalExec}次${totalFail>0?' · '+totR+'%异常':''}</span></td></tr>`;
+    return `<tr><td>${escapeHtml(d.id)}<span class="col-device-label">${escapeHtml(d.label)}</span></td>${cells}<td><span class="heat-cell ${totCls}">${totalExec}次${totalFail>0?' · '+totR+'%异常':''}</span></td></tr>`;
   }).join('');
   el.innerHTML = `<table class="heat-matrix"><thead>${head}</thead><tbody>${rows}</tbody></table>`;
 }
@@ -99,8 +100,8 @@ export function renderDeviceMetricsTable() {
       ? '<span class="device-status-dot online"></span>'
       : '<span class="device-status-dot warning"></span>';
     return '<tr>' +
-      '<td class="td-bold">' + statusDot + dev.label + '</td>' +
-      '<td class="text-muted">' + (m.operator || '—') + '</td>' +
+      '<td class="td-bold">' + statusDot + escapeHtml(dev.label) + '</td>' +
+      '<td class="text-muted">' + escapeHtml(m.operator || '—') + '</td>' +
       '<td class="td-mono">' + m.tokenUsage.toLocaleString() + '</td>' +
       '<td class="td-mono">' + m.successCount + '</td>' +
       '<td class="td-mono">' + m.successDuration + '</td>' +

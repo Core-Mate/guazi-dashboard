@@ -4,7 +4,7 @@ import { showLoader, hideLoader } from './loader'
 import { openModal, closeModal, showToast } from './modal-toast'
 import { INTERACTION_BREAKDOWN } from '../data/charts'
 import { PLATFORM_BREAKDOWN } from '../data/platforms'
-import { fetchDashboardData } from './api-integration'
+import { fetchDashboardData, showDashboardError } from './api-integration'
 
 function emptyOpsTrend(): any {
   return {
@@ -29,13 +29,14 @@ function getLocalDateStr(d?: Date): string {
     String(date.getDate()).padStart(2, '0')
 }
 
-function triggerSnapshotBoot(range: string, custom?: { start: string; end: string }) {
+async function triggerSnapshotBoot(range: string, custom?: { start: string; end: string }) {
   var boot = (window as any).bootDashboardSnapshot
   showLoader()
-  if (typeof boot === 'function') {
-    return Promise.resolve(boot(range, custom)).finally(hideLoader)
-  }
-  return fetchDashboardData(range, custom).then(function(snap) {
+  try {
+    if (typeof boot === 'function') {
+      return await Promise.resolve(boot(range, custom))
+    }
+    var snap = await fetchDashboardData(range, custom)
     renderHighlightCards((snap && snap.highlights && snap.highlights.cards) || [], range)
     if (typeof renderAchievements === 'function') {
       renderAchievements((snap && snap.achievements && snap.achievements.achievements) || [])
@@ -66,7 +67,15 @@ function triggerSnapshotBoot(range: string, custom?: { start: string; end: strin
         }
       : emptyOpsTrend()
     updateCharts(range, trend)
-  }).finally(hideLoader)
+    return snap
+  } catch (error) {
+    var message = error instanceof Error ? error.message : '数据加载失败'
+    showDashboardError('数据加载失败：' + message)
+    showToast('数据加载失败：' + message, 'error')
+    return null
+  } finally {
+    hideLoader()
+  }
 }
 
 export function setRange(range, btn) {
@@ -78,7 +87,7 @@ export function setRange(range, btn) {
   if (customBtn && customBtn !== btn) customBtn.textContent = '自定义';
   setHighlightLoading();
   setCurrentRange(range);
-  triggerSnapshotBoot(range);
+  void triggerSnapshotBoot(range);
 }
 
 var calState = {
@@ -220,7 +229,7 @@ export function calApply() {
   customBtn.textContent = calState.startDate.slice(5).replace('-', '/') + ' ~ ' + calState.endDate.slice(5).replace('-', '/');
   setCurrentRange('custom');
   setHighlightLoading();
-  triggerSnapshotBoot('custom', { start: calState.startDate, end: calState.endDate });
+  void triggerSnapshotBoot('custom', { start: calState.startDate, end: calState.endDate });
 }
 
 export function setDatePreset(days) {
@@ -246,5 +255,5 @@ export function applyCustomRange() {
   customBtn.textContent = start.slice(5).replace('-','/') + ' ~ ' + end.slice(5).replace('-','/');
   setCurrentRange('custom');
   setHighlightLoading();
-  triggerSnapshotBoot('custom', { start: start, end: end });
+  void triggerSnapshotBoot('custom', { start: start, end: end });
 }

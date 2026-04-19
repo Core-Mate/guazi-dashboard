@@ -4,7 +4,7 @@ import { downloadCSV } from './export-utils'
 import type { AccountWeekSummary } from './api-integration'
 import { fetchAccountWeekSummary, getDashboardTenantId } from './api-integration'
 import { drawSparkline } from './charts'
-import { getContentClampBounds, smoothToggleCollapse } from './utils'
+import { escapeHtml, getContentClampBounds, smoothToggleCollapse } from './utils'
 
 var accountSortState: { col: string; dir: 'asc' | 'desc' } = { col: '', dir: 'asc' }
 var accountSearchQuery = '';
@@ -370,7 +370,7 @@ export function renderAccountAcquireGroup() {
   var tableRows = filtered.length ? filtered.map(function(acc) {
     function displayVal(v) { return v > 0 ? v.toLocaleString() : '<span class="text-na">暂无</span>'; }
     return '<tr data-account-id="' + String(acc.id || '') + '">' +
-      '<td class="td-bold">' + acc.name + '</td>' +
+      '<td class="td-bold">' + escapeHtml(acc.name) + '</td>' +
       '<td class="td-mono">' + acc.successCount + '</td>' +
       '<td class="td-mono">' + acc.tokenUsed.toLocaleString() + '</td>' +
       '<td class="td-mono">' + acc.successDuration + '</td>' +

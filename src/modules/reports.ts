@@ -6,6 +6,7 @@ let currentReportBlob = null
 let currentReportDim = 'week'
 let roiPlatformChart = null
 let currentReportSwitchRequestId = 0
+let currentReportPreviewUrl = ''
 
 function wait(ms: number) {
   return new Promise<void>(function(resolve) {
@@ -18,6 +19,12 @@ function createReportLoadingOverlay(text: string): HTMLDivElement {
   overlay.className = 'report-loading-overlay'
   overlay.innerHTML = '<div class="loader-spinner"></div><div class="loader-text">' + text + '</div>'
   return overlay
+}
+
+function revokeReportPreviewUrl() {
+  if (!currentReportPreviewUrl) return
+  URL.revokeObjectURL(currentReportPreviewUrl)
+  currentReportPreviewUrl = ''
 }
 
 function getReportLabel(dim: string): string {
@@ -815,7 +822,9 @@ export async function generateReport() {
       }, 'image/png');
     });
     currentReportBlob = blob;
+    revokeReportPreviewUrl()
     var url = URL.createObjectURL(blob);
+    currentReportPreviewUrl = url
     var previewImg = document.getElementById('reportPreviewImg') as HTMLImageElement | null;
     if (previewImg) previewImg.src = url;
     var overlay = document.getElementById('reportOverlay');
@@ -839,6 +848,9 @@ export async function generateReport() {
 
 export function closeReportPreview() {
   document.getElementById('reportOverlay').classList.remove('open');
+  var previewImg = document.getElementById('reportPreviewImg') as HTMLImageElement | null;
+  if (previewImg) previewImg.src = ''
+  revokeReportPreviewUrl()
 }
 
 export function saveReportImage() {
@@ -900,7 +912,9 @@ export async function switchReportDim(dim, btn) {
     await minDelay;
     if (requestId !== currentReportSwitchRequestId) return;
     currentReportBlob = blob;
+    revokeReportPreviewUrl()
     var url = URL.createObjectURL(currentReportBlob);
+    currentReportPreviewUrl = url
     var previewImg = document.getElementById('reportPreviewImg') as HTMLImageElement | null;
     if (previewImg) previewImg.src = url;
     saveBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 保存图片';

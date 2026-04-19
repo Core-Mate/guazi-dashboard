@@ -3,6 +3,8 @@ import { showToast } from '../modules/modal-toast';
 var API_BASE = ((import.meta as any).env && (import.meta as any).env.VITE_API_BASE) || '/api';
 var MISSING_API_KEY_MESSAGE = '未配置 API Key，请联系管理员';
 var API_KEY_WARNING_FLAG = '__dashboardApiKeyMissingWarned__';
+var API_REQUEST_TIMEOUT_MS = 8000;
+var API_PROBE_TIMEOUT_MS = 3000;
 
 function resolveApiKey(): string {
   try {
@@ -32,6 +34,39 @@ function getApiKey(): string {
   return apiKey;
 }
 
+function withRequestTimeout(timeoutMs: number) {
+  if (typeof AbortController === 'undefined' || timeoutMs <= 0) {
+    return {
+      signal: undefined as AbortSignal | undefined,
+      clear: function() {},
+      didTimeout: function() { return false },
+    }
+  }
+  var controller = new AbortController()
+  var timedOut = false
+  var timer = window.setTimeout(function() {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
+  return {
+    signal: controller.signal,
+    clear: function() {
+      window.clearTimeout(timer)
+    },
+    didTimeout: function() {
+      return timedOut
+    },
+  }
+}
+
+async function parseJSONResponse<T>(res: Response): Promise<T | null> {
+  try {
+    return await res.json()
+  } catch {
+    return null
+  }
+}
+
 function newIdempotencyKey(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return crypto.randomUUID()
@@ -48,14 +83,18 @@ if (!resolveApiKey()) notifyMissingApiKey();
 export async function fetchJSON<T>(path: string): Promise<T | null> {
   var apiKey = getApiKey();
   if (!apiKey) return null;
+  var timeout = withRequestTimeout(API_REQUEST_TIMEOUT_MS)
   try {
     var res = await fetch(API_BASE + path, {
       headers: { 'X-API-Key': apiKey },
+      signal: timeout.signal,
     });
     if (!res.ok) return null;
-    return await res.json();
+    return await parseJSONResponse<T>(res);
   } catch {
     return null;
+  } finally {
+    timeout.clear()
   }
 }
 
@@ -107,14 +146,17 @@ export function isApiAvailable(): Promise<boolean> {
   if (!apiKey) return Promise.resolve(false);
   if (_apiPromise) return _apiPromise;
   _apiPromise = (async function() {
+    var timeout = withRequestTimeout(API_PROBE_TIMEOUT_MS)
     try {
       var res = await fetch(API_BASE + '/stats/overview?days=1', {
         headers: { 'X-API-Key': apiKey },
-        signal: AbortSignal.timeout(3000),
+        signal: timeout.signal,
       });
       return res.ok;
     } catch {
       return false;
+    } finally {
+      timeout.clear()
     }
   })();
   return _apiPromise;
@@ -202,6 +244,7 @@ export async function fetchAccounts() {
 export async function mutateJSON<T>(method: string, path: string, body?: any): Promise<{ok: boolean; status: number; data: T | null; error?: string}> {
   var apiKey = getApiKey();
   if (!apiKey) return { ok: false, status: 0, data: null, error: MISSING_API_KEY_MESSAGE };
+  var timeout = withRequestTimeout(API_REQUEST_TIMEOUT_MS)
   try {
     var opts: RequestInit = {
       method: method,
@@ -210,17 +253,21 @@ export async function mutateJSON<T>(method: string, path: string, body?: any): P
         'Content-Type': 'application/json',
         'Idempotency-Key': newIdempotencyKey(),
       },
+      signal: timeout.signal,
     };
     if (body !== undefined) opts.body = JSON.stringify(body);
     var res = await fetch(API_BASE + path, opts);
-    var data = await res.json();
+    var data = await parseJSONResponse<T & { error?: string; detail?: string | unknown }>(res);
     if (!res.ok) {
-      var errMsg = data.error || (data.detail ? (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)) : '操作失败');
+      var errMsg = (data && data.error)
+        || (data && data.detail ? (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)) : '操作失败');
       return { ok: false, status: res.status, data: null, error: errMsg };
     }
-    return { ok: true, status: res.status, data };
+    return { ok: true, status: res.status, data: data as T | null };
   } catch {
-    return { ok: false, status: 0, data: null, error: '网络错误' };
+    return { ok: false, status: 0, data: null, error: timeout.didTimeout() ? '请求超时' : '网络错误' };
+  } finally {
+    timeout.clear()
   }
 }
 
