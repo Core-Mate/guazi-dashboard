@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Optional
 
 import asyncpg
+from asyncpg import Connection
 from asyncpg import Pool
 from dotenv import load_dotenv
 
@@ -35,6 +36,12 @@ def _env_float(name: str, default: float, minimum: float) -> float:
     return value if value >= minimum else default
 
 
+async def _init_connection(conn: Connection) -> None:
+    schema = os.getenv("DB_SCHEMA", "public").strip() or "public"
+    await conn.execute("SELECT set_config('search_path', $1, false)", schema)
+    await conn.execute("SELECT set_config('TimeZone', $1, false)", "Asia/Shanghai")
+
+
 async def init_pool() -> None:
     global _pool
 
@@ -54,10 +61,8 @@ async def init_pool() -> None:
         max_size=max_size,
         command_timeout=command_timeout,
         statement_cache_size=statement_cache_size,
-        server_settings={
-            "search_path": os.getenv("DB_SCHEMA", "public"),
-            "TimeZone": "Asia/Shanghai",
-        },
+        max_inactive_connection_lifetime=300,
+        init=_init_connection,
     )
 
     async with _pool.acquire() as conn:

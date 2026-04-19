@@ -3,8 +3,10 @@ from collections import OrderedDict
 from contextlib import asynccontextmanager, suppress
 from datetime import date
 import importlib
+import json
 import logging
 import os
+import sys
 import time
 from typing import Any, Awaitable, Callable, Optional
 
@@ -15,6 +17,66 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
+
+
+def _sensitive_log_tokens() -> tuple[str, ...]:
+    tokens = {
+        os.getenv("DATABASE_URL", "").strip(),
+        os.getenv("API_KEY", "").strip(),
+        os.getenv("DASHBOARD_API_KEYS", "").strip(),
+    }
+    raw_keys = os.getenv("DASHBOARD_API_KEYS", "").strip()
+    for entry in raw_keys.split(","):
+        entry = entry.strip()
+        if not entry or ":" not in entry:
+            continue
+        key, _ = entry.rsplit(":", 1)
+        key = key.strip()
+        if key:
+            tokens.add(key)
+    return tuple(token for token in tokens if token)
+
+
+def _sanitize_log_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: ("[REDACTED]" if key.lower() in {"api_key", "password", "database_url"} else _sanitize_log_value(val))
+            for key, val in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_log_value(item) for item in value]
+    if isinstance(value, str):
+        sanitized = value
+        for token in _sensitive_log_tokens():
+            sanitized = sanitized.replace(token, "[REDACTED]")
+        return sanitized
+    return value
+
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": _sanitize_log_value(record.getMessage()),
+        }
+        if hasattr(record, "extra"):
+            payload.update(_sanitize_log_value(record.extra))
+        if record.exc_info:
+            payload["exc_info"] = _sanitize_log_value(self.formatException(record.exc_info))
+        return json.dumps(payload, ensure_ascii=False)
+
+
+root = logging.getLogger()
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(JsonFormatter())
+root.handlers = [handler]
+root.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
 
 import auth
 from auth import require_api_key
@@ -78,6 +140,20 @@ _dashboard_aggs_cache = TTLCache(maxsize=_DASHBOARD_CACHE_MAXSIZE, ttl=_DASHBOAR
 _dashboard_aggs_lock = asyncio.Lock()
 _dashboard_ops_trend_cache = TTLCache(maxsize=_DASHBOARD_CACHE_MAXSIZE, ttl=_DASHBOARD_CACHE_TTL)
 _dashboard_ops_trend_lock = asyncio.Lock()
+
+
+def tenant_key_fn(request: Request) -> str:
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if not tenant_id:
+        api_key = request.headers.get("X-API-Key", "").strip()
+        if api_key:
+            tenant_id = auth.resolve_tenant_id(api_key)
+    if tenant_id:
+        return f"tenant:{tenant_id}"
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=tenant_key_fn)
 
 
 def _get_warmup_tenant_ids() -> list[int]:
@@ -206,9 +282,40 @@ async def _warmup() -> None:
         logger.exception("Dashboard snapshot warmup initialization failed")
 
 
+async def startup_self_check() -> None:
+    pool = await db.get_pool()
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute("SELECT 1")
+    except Exception as exc:
+        raise RuntimeError(f"DB startup check failed: {exc}") from exc
+
+    tenant_env = os.getenv("TENANT_ID", "").strip()
+    keys_env = os.getenv("DASHBOARD_API_KEYS", "").strip()
+    if not keys_env and tenant_env in ("", "1"):
+        raise RuntimeError(
+            "Must set DASHBOARD_API_KEYS (key:tenant,...) or TENANT_ID to a real tenant id (not default 1)"
+        )
+
+    logger.info(
+        "Dashboard startup self-check passed",
+        extra={
+            "extra": {
+                "dashboard_api_keys_present": bool(keys_env),
+                "tenant_id_configured": bool(tenant_env and tenant_env != "1"),
+            }
+        },
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.init_pool()
+    try:
+        await startup_self_check()
+    except Exception:
+        await db.close_pool()
+        raise
     warmup_task = asyncio.create_task(_warmup())
     tick_task = asyncio.create_task(_hot_cache_tick_loop(60))
     try:
@@ -224,6 +331,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -232,24 +341,33 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def bind_tenant_context(request: Request, call_next):
+    request.state.tenant_id = None
+    api_key = request.headers.get("X-API-Key", "").strip()
+    if api_key:
+        request.state.tenant_id = auth.resolve_tenant_id(api_key)
+    return await call_next(request)
+
+
+app.add_middleware(SlowAPIMiddleware)
+
+
 @app.get("/health")
 async def health_check():
-    return {"status": "ok"}
-
-
-@app.get("/ready")
-async def readiness_check():
     try:
         pool = await db.get_pool()
         async with pool.acquire() as conn:
             await conn.execute("SELECT 1")
-        return {"status": "ready"}
-    except (RuntimeError, asyncpg.PostgresError) as exc:
-        logger.exception(
-            "Dashboard readiness check failed",
-            exc_info=(type(exc), exc, exc.__traceback__),
-        )
-        return JSONResponse(status_code=503, content={"status": "not ready"})
+        return {"status": "ok"}
+    except Exception:
+        logger.exception("Dashboard health check failed")
+        return JSONResponse(status_code=503, content={"status": "error"})
+
+
+@app.get("/ready")
+async def readiness_check():
+    return {"status": "ok"}
 
 _ALLOWED_MEMBER_ROLES = {"admin", "member", "user"}
 _MAX_MEMBER_TEXT_LENGTH = 128
@@ -596,6 +714,7 @@ class DistributeRequest(BaseModel):
 
 
 @app.post("/api/credits/distribute")
+@limiter.limit("60/minute")
 async def api_distribute_credits(
     request: Request,
     body: DistributeRequest,
@@ -643,6 +762,7 @@ class UpdateMemberRequest(BaseModel):
 
 
 @app.put("/api/members/{user_id}")
+@limiter.limit("60/minute")
 async def api_update_member(
     request: Request,
     user_id: int,
@@ -686,6 +806,7 @@ async def api_update_member(
 
 
 @app.delete("/api/members/{user_id}")
+@limiter.limit("60/minute")
 async def api_delete_member(
     request: Request,
     user_id: int,
@@ -727,6 +848,7 @@ class AddMemberRequest(BaseModel):
 
 
 @app.post("/api/members")
+@limiter.limit("60/minute")
 async def api_add_member(
     request: Request,
     body: AddMemberRequest,

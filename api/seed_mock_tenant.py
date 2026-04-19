@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import random
 from collections import defaultdict
@@ -11,6 +12,8 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 random.seed(42)
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
 
 # DO NOT run in production
 TENANT_CODE = "MOCK01"
@@ -816,12 +819,12 @@ async def main() -> None:
             )
             await insert_audit_logs(conn, tenant_int_id, user_map, base_now)
 
-        print("✅ Seed 完成")
-        print(f"Tenant int ID: {tenant_int_id}")
-        print("Users:")
+        logger.info("Seed completed")
+        logger.info("Tenant int ID: %s", tenant_int_id)
+        logger.info("Users:")
         for user in USER_SPECS:
-            print(f"  {user['name']} ({user['role']}): {user_map[user['name']]}")
-        print(f"提示：在 auth.py 中设置 TENANT_ID={tenant_int_id}")
+            logger.info("  %s (%s): %s", user["name"], user["role"], user_map[user["name"]])
+        logger.info("提示：在 auth.py 中设置 TENANT_ID=%s", tenant_int_id)
     finally:
         await conn.close()
 

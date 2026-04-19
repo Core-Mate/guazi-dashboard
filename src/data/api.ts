@@ -1,37 +1,24 @@
-import { showToast } from '../modules/modal-toast';
-
 var API_BASE = ((import.meta as any).env && (import.meta as any).env.VITE_API_BASE) || '/api';
-var MISSING_API_KEY_MESSAGE = '未配置 API Key，请联系管理员';
-var API_KEY_WARNING_FLAG = '__dashboardApiKeyMissingWarned__';
 var API_REQUEST_TIMEOUT_MS = 8000;
 var API_PROBE_TIMEOUT_MS = 3000;
 
-function resolveApiKey(): string {
-  try {
-    var stored = localStorage.getItem('dashboardApiKey');
-    if (stored && stored.trim()) return stored.trim();
-  } catch {}
-  var envValue = ((import.meta as any).env && (import.meta as any).env.VITE_API_KEY) || '';
-  return typeof envValue === 'string' ? envValue.trim() : '';
-}
-
-function notifyMissingApiKey() {
-  var globalState = globalThis as any;
-  if (globalState[API_KEY_WARNING_FLAG]) return;
-  globalState[API_KEY_WARNING_FLAG] = true;
-  console.error(MISSING_API_KEY_MESSAGE);
-  try {
-    showToast(MISSING_API_KEY_MESSAGE, 'error');
-  } catch {}
-}
-
 function getApiKey(): string {
-  var apiKey = resolveApiKey();
-  if (!apiKey) {
-    notifyMissingApiKey();
-    return '';
+  if (import.meta.env.DEV) {
+    return localStorage.getItem('dashboardApiKey')
+      || import.meta.env.VITE_API_KEY
+      || '';
   }
-  return apiKey;
+  return '';
+}
+
+function buildApiHeaders(extraHeaders?: Record<string, string>): Record<string, string> {
+  var headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  var apiKey = getApiKey();
+  if (apiKey) headers['X-API-Key'] = apiKey;
+  if (extraHeaders) {
+    Object.assign(headers, extraHeaders);
+  }
+  return headers;
 }
 
 function withRequestTimeout(timeoutMs: number) {
@@ -78,15 +65,11 @@ function newIdempotencyKey(): string {
   })
 }
 
-if (!resolveApiKey()) notifyMissingApiKey();
-
 export async function fetchJSON<T>(path: string): Promise<T | null> {
-  var apiKey = getApiKey();
-  if (!apiKey) return null;
   var timeout = withRequestTimeout(API_REQUEST_TIMEOUT_MS)
   try {
     var res = await fetch(API_BASE + path, {
-      headers: { 'X-API-Key': apiKey },
+      headers: buildApiHeaders(),
       signal: timeout.signal,
     });
     if (!res.ok) return null;
@@ -142,14 +125,12 @@ export async function fetchCredits(days: number = 30) {
 var _apiPromise: Promise<boolean> | null = null;
 
 export function isApiAvailable(): Promise<boolean> {
-  var apiKey = getApiKey();
-  if (!apiKey) return Promise.resolve(false);
   if (_apiPromise) return _apiPromise;
   _apiPromise = (async function() {
     var timeout = withRequestTimeout(API_PROBE_TIMEOUT_MS)
     try {
       var res = await fetch(API_BASE + '/stats/overview?days=1', {
-        headers: { 'X-API-Key': apiKey },
+        headers: buildApiHeaders(),
         signal: timeout.signal,
       });
       return res.ok;
@@ -242,17 +223,11 @@ export async function fetchAccounts() {
 }
 
 export async function mutateJSON<T>(method: string, path: string, body?: any): Promise<{ok: boolean; status: number; data: T | null; error?: string}> {
-  var apiKey = getApiKey();
-  if (!apiKey) return { ok: false, status: 0, data: null, error: MISSING_API_KEY_MESSAGE };
   var timeout = withRequestTimeout(API_REQUEST_TIMEOUT_MS)
   try {
     var opts: RequestInit = {
       method: method,
-      headers: {
-        'X-API-Key': apiKey,
-        'Content-Type': 'application/json',
-        'Idempotency-Key': newIdempotencyKey(),
-      },
+      headers: buildApiHeaders({ 'Idempotency-Key': newIdempotencyKey() }),
       signal: timeout.signal,
     };
     if (body !== undefined) opts.body = JSON.stringify(body);

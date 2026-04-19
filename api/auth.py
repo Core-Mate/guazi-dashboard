@@ -46,8 +46,13 @@ def _resolve_tenant_id(api_key: str):
     return None
 
 
+def resolve_tenant_id(api_key: str):
+    return _resolve_tenant_id(api_key)
+
+
 async def require_api_key(request: Request) -> int:
     if request.url.path in OPEN_PATHS:
+        request.state.tenant_id = 1
         return 1
 
     api_key = request.headers.get("X-API-Key", "").strip()
@@ -72,6 +77,7 @@ async def require_api_key(request: Request) -> int:
         )
         raise HTTPException(status_code=401, detail="Invalid API key")
 
+    request.state.tenant_id = tenant_id
     return tenant_id
 
 

@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Any, Optional
 
 try:
@@ -15,6 +16,9 @@ TENANT_ID = 1
 TENANT_CODE = "73S4SK"
 TIMEOUT = 10
 
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
 
 class SkipStep(Exception):
     pass
@@ -30,17 +34,17 @@ class StepRunner:
     def pass_step(self, step_no: str, title: str, detail: str) -> None:
         self.pass_count += 1
         self.total_count += 1
-        print(f"✅ PASS {step_no} {title}: {detail}")
+        logger.info("PASS %s %s: %s", step_no, title, detail)
 
     def fail_step(self, step_no: str, title: str, detail: str) -> None:
         self.fail_count += 1
         self.total_count += 1
-        print(f"❌ FAIL {step_no} {title}: {detail}")
+        logger.error("FAIL %s %s: %s", step_no, title, detail)
 
     def skip_step(self, step_no: str, title: str, detail: str) -> None:
         self.skip_count += 1
         self.total_count += 1
-        print(f"⚪ SKIP {step_no} {title}: {detail}")
+        logger.info("SKIP %s %s: %s", step_no, title, detail)
 
     def run(self, step_no: str, title: str, fn) -> None:
         try:
@@ -221,11 +225,16 @@ def fetch_transactions(session: requests.Session, page: int = 1, page_size: int 
 
 
 def main() -> None:
-    print("=== Dashboard Backend Write API E2E ===")
-    print(f"BASE_URL={BASE_URL}")
-    print(f"HEADERS={HEADERS}")
-    print(f"ADMIN_ID={ADMIN_ID}, ADMIN_PHONE={ADMIN_PHONE}, TENANT_ID={TENANT_ID}, TENANT_CODE={TENANT_CODE}")
-    print()
+    logger.info("=== Dashboard Backend Write API E2E ===")
+    logger.info("BASE_URL=%s", BASE_URL)
+    logger.info("HEADERS api_key_present=%s", bool(HEADERS.get("X-API-Key")))
+    logger.info(
+        "ADMIN_ID=%s ADMIN_PHONE=%s TENANT_ID=%s TENANT_CODE=%s",
+        ADMIN_ID,
+        ADMIN_PHONE,
+        TENANT_ID,
+        TENANT_CODE,
+    )
 
     runner = StepRunner()
     session = requests.Session()
@@ -268,8 +277,7 @@ def main() -> None:
     runner.run("17.", "GET /members verify deletion", lambda: step_17(session, state, require_state))
     runner.run("18.", "GET /audit-log verify REMOVE_MEMBER entry", lambda: step_18(session, state, require_state))
 
-    print()
-    print(
+    logger.info(
         "SUMMARY "
         f"PASS={runner.pass_count} "
         f"FAIL={runner.fail_count} "
