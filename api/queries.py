@@ -516,13 +516,11 @@ async def aggregate_highlights(
 ) -> dict[str, Any]:
     cur_start, cur_end, prev_start, prev_end, compare_label, granularity, _ = _window or _resolve_window(range_param, start, end)
 
-    bucket_rows, prev_totals = await asyncio.gather(
-        _fetch_metric_buckets(pool, tenant_id, cur_start, cur_end, granularity),
-        _resolve_async_value(
-            _prev_totals
-            if _prev_totals is not None
-            else _fetch_period_totals(pool, tenant_id, prev_start, prev_end)
-        ),
+    bucket_rows = await _fetch_metric_buckets(pool, tenant_id, cur_start, cur_end, granularity)
+    prev_totals = await _resolve_async_value(
+        _prev_totals
+        if _prev_totals is not None
+        else _fetch_period_totals(pool, tenant_id, prev_start, prev_end)
     )
 
     labels = [_bucket_label(r["bucket"], granularity) for r in bucket_rows]
@@ -581,13 +579,11 @@ async def aggregate_achievements(
 ) -> dict[str, Any]:
     cur_start, cur_end, prev_start, prev_end, compare_label, unit, _ = _window or _resolve_window(range_param, start, end)
 
-    bucket_rows, prev_totals = await asyncio.gather(
-        _fetch_metric_buckets(pool, tenant_id, cur_start, cur_end, unit),
-        _resolve_async_value(
-            _prev_totals
-            if _prev_totals is not None
-            else _fetch_period_totals(pool, tenant_id, prev_start, prev_end)
-        ),
+    bucket_rows = await _fetch_metric_buckets(pool, tenant_id, cur_start, cur_end, unit)
+    prev_totals = await _resolve_async_value(
+        _prev_totals
+        if _prev_totals is not None
+        else _fetch_period_totals(pool, tenant_id, prev_start, prev_end)
     )
     cur_totals = {
         source_key: sum(int(r[source_key]) for r in bucket_rows)
@@ -640,215 +636,162 @@ async def aggregate_aggregations(
 ) -> dict[str, Any]:
     cur_start, cur_end, _, _, _, _, _ = _window or _resolve_window(range_param, start, end)
 
-    account_rows, skill_rows, device_rows, heat_rows = await asyncio.gather(
-        pool.fetch(
-            f"""
-            WITH account_te_agg AS (
-                SELECT
-                    te.user_id,
-                    MAX(te.device_id) AS device_id,
-                    COUNT(te.id)::bigint AS exec_count,
-                    COUNT(te.id) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success_count,
-                    COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float AS duration_sec,
-                    COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
-                    COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
-                    COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
-                    COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
-                    COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
-                FROM task_execution te
-                LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
-                JOIN users u ON u.id = te.user_id
-                WHERE u.tenant_id = $1
-                  AND COALESCE(te.finished_at, te.started_at) >= $2
-                  AND COALESCE(te.finished_at, te.started_at) < $3
-                  AND NOT te.is_deleted
-                  AND NOT u.is_deleted
-                GROUP BY te.user_id
-            ),
-            account_credit_agg AS (
-                SELECT
-                    te.user_id,
-                    COALESCE(SUM(ur.credits_used), 0)::bigint AS total_credits
-                FROM task_execution te
-                JOIN users u ON u.id = te.user_id
-                LEFT JOIN usage_record ur
-                    -- schema mismatch: usage_record.task_id is varchar while task_execution.id is int; a future migration should align these column types.
-                    ON ur.task_id = te.id::varchar
-                WHERE u.tenant_id = $1
-                  AND COALESCE(te.finished_at, te.started_at) >= $2
-                  AND COALESCE(te.finished_at, te.started_at) < $3
-                  AND NOT te.is_deleted
-                  AND NOT u.is_deleted
-                GROUP BY te.user_id
-            )
+    account_rows = await pool.fetch(
+        f"""
+        WITH account_te_agg AS (
             SELECT
-                u.id AS user_id,
-                u.name AS username,
-                u.role,
-                account_te_agg.device_id,
-                COALESCE(account_te_agg.exec_count, 0)::bigint AS exec_count,
-                COALESCE(account_te_agg.success_count, 0)::bigint AS success_count,
-                COALESCE(account_te_agg.duration_sec, 0)::float AS duration_sec,
-                COALESCE(account_te_agg.comments, 0)::bigint AS comments,
-                COALESCE(account_te_agg.likes, 0)::bigint AS likes,
-                COALESCE(account_te_agg.saves, 0)::bigint AS saves,
-                COALESCE(account_te_agg.dms, 0)::bigint AS dms,
-                COALESCE(account_te_agg.reach, 0)::bigint AS reach,
-                COALESCE(account_credit_agg.total_credits, 0)::bigint AS total_credits
-            FROM users u
-            LEFT JOIN account_te_agg ON account_te_agg.user_id = u.id
-            LEFT JOIN account_credit_agg ON account_credit_agg.user_id = u.id
+                te.user_id,
+                MAX(te.device_id) AS device_id,
+                COUNT(te.id)::bigint AS exec_count,
+                COUNT(te.id) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success_count,
+                COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float AS duration_sec,
+                COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
+                COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
+                COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
+                COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
+                COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
+            FROM task_execution te
+            LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
+            JOIN users u ON u.id = te.user_id
             WHERE u.tenant_id = $1
+              AND COALESCE(te.finished_at, te.started_at) >= $2
+              AND COALESCE(te.finished_at, te.started_at) < $3
+              AND NOT te.is_deleted
               AND NOT u.is_deleted
-            ORDER BY COALESCE(account_te_agg.exec_count, 0) DESC, u.id
-            """,
-            tenant_id, cur_start, cur_end,
+            GROUP BY te.user_id
         ),
-        pool.fetch(
-            f"""
-            WITH skill_te_agg AS (
-                SELECT
-                    te.task_id AS skill_id,
-                    COUNT(te.id)::bigint AS exec_count,
-                    COUNT(te.id) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success_count,
-                    COUNT(te.id) FILTER (WHERE te.execution_result = 'FAILED')::bigint AS fail_count,
-                    COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float AS duration_sec,
-                    COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
-                    COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
-                    COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
-                    COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
-                    COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
-                FROM task_execution te
-                LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
-                JOIN users u ON u.id = te.user_id
-                WHERE u.tenant_id = $1
-                  AND te.task_id IS NOT NULL
-                  AND COALESCE(te.finished_at, te.started_at) >= $2
-                  AND COALESCE(te.finished_at, te.started_at) < $3
-                  AND NOT te.is_deleted
-                  AND NOT u.is_deleted
-                GROUP BY te.task_id
-            ),
-            skill_credit_agg AS (
-                SELECT
-                    te.task_id AS skill_id,
-                    COALESCE(SUM(ur.credits_used), 0)::bigint AS total_credits
-                FROM task_execution te
-                JOIN users u ON u.id = te.user_id
-                LEFT JOIN usage_record ur
-                    -- schema mismatch: usage_record.task_id is varchar while task_execution.id is int; a future migration should align these column types.
-                    ON ur.task_id = te.id::varchar
-                WHERE u.tenant_id = $1
-                  AND te.task_id IS NOT NULL
-                  AND COALESCE(te.finished_at, te.started_at) >= $2
-                  AND COALESCE(te.finished_at, te.started_at) < $3
-                  AND NOT te.is_deleted
-                  AND NOT u.is_deleted
-                GROUP BY te.task_id
-            )
+        account_credit_agg AS (
             SELECT
-                ut.id AS skill_id,
-                ut.task_name AS skill_name,
-                CASE
-                    WHEN (
-                        COALESCE(skill_te_agg.comments, 0) +
-                        COALESCE(skill_te_agg.likes, 0) +
-                        COALESCE(skill_te_agg.saves, 0) +
-                        COALESCE(skill_te_agg.dms, 0) +
-                        COALESCE(skill_te_agg.reach, 0)
-                    ) > 0 THEN 'acquire'
-                    ELSE 'ops'
-                END AS task_group,
-                ut.related_platforms,
-                ut.task_description AS description,
-                COALESCE(skill_te_agg.exec_count, 0)::bigint AS exec_count,
-                COALESCE(skill_te_agg.success_count, 0)::bigint AS success_count,
-                COALESCE(skill_te_agg.fail_count, 0)::bigint AS fail_count,
-                COALESCE(skill_te_agg.duration_sec, 0)::float AS duration_sec,
-                COALESCE(skill_te_agg.comments, 0)::bigint AS comments,
-                COALESCE(skill_te_agg.likes, 0)::bigint AS likes,
-                COALESCE(skill_te_agg.saves, 0)::bigint AS saves,
-                COALESCE(skill_te_agg.dms, 0)::bigint AS dms,
-                COALESCE(skill_te_agg.reach, 0)::bigint AS reach,
-                COALESCE(skill_credit_agg.total_credits, 0)::bigint AS total_credits
-            FROM user_task ut
-            JOIN users u ON u.id = ut.user_id
-            LEFT JOIN skill_te_agg ON skill_te_agg.skill_id = ut.id
-            LEFT JOIN skill_credit_agg ON skill_credit_agg.skill_id = ut.id
+                te.user_id,
+                COALESCE(SUM(ur.credits_used), 0)::bigint AS total_credits
+            FROM task_execution te
+            JOIN users u ON u.id = te.user_id
+            LEFT JOIN usage_record ur
+                -- schema mismatch: usage_record.task_id is varchar while task_execution.id is int; a future migration should align these column types.
+                ON ur.task_id = te.id::varchar
             WHERE u.tenant_id = $1
-              AND NOT ut.is_deleted
+              AND COALESCE(te.finished_at, te.started_at) >= $2
+              AND COALESCE(te.finished_at, te.started_at) < $3
+              AND NOT te.is_deleted
               AND NOT u.is_deleted
-              AND COALESCE(skill_te_agg.exec_count, 0) > 0
-            ORDER BY COALESCE(skill_te_agg.exec_count, 0) DESC, ut.id
-            """,
-            tenant_id, cur_start, cur_end,
-        ),
-        pool.fetch(
-            f"""
-            WITH device_te_agg AS (
-                SELECT
-                    te.device_id,
-                    COUNT(*)::bigint AS exec_count,
-                    COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success_count,
-                    COUNT(*) FILTER (WHERE te.execution_result = 'FAILED')::bigint AS fail_count,
-                    COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float AS duration_sec,
-                    COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
-                    COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
-                    COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
-                    COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
-                    COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
-                FROM task_execution te
-                LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
-                JOIN users u ON u.id = te.user_id
-                WHERE u.tenant_id = $1
-                  AND te.device_id IS NOT NULL
-                  AND COALESCE(te.finished_at, te.started_at) >= $2
-                  AND COALESCE(te.finished_at, te.started_at) < $3
-                  AND NOT te.is_deleted
-                  AND NOT u.is_deleted
-                GROUP BY te.device_id
-            ),
-            device_credit_agg AS (
-                SELECT
-                    te.device_id,
-                    COALESCE(SUM(ur.credits_used), 0)::bigint AS total_credits
-                FROM task_execution te
-                JOIN users u ON u.id = te.user_id
-                LEFT JOIN usage_record ur
-                    -- schema mismatch: usage_record.task_id is varchar while task_execution.id is int; a future migration should align these column types.
-                    ON ur.task_id = te.id::varchar
-                WHERE u.tenant_id = $1
-                  AND te.device_id IS NOT NULL
-                  AND COALESCE(te.finished_at, te.started_at) >= $2
-                  AND COALESCE(te.finished_at, te.started_at) < $3
-                  AND NOT te.is_deleted
-                  AND NOT u.is_deleted
-                GROUP BY te.device_id
-            )
+            GROUP BY te.user_id
+        )
+        SELECT
+            u.id AS user_id,
+            u.name AS username,
+            u.role,
+            account_te_agg.device_id,
+            COALESCE(account_te_agg.exec_count, 0)::bigint AS exec_count,
+            COALESCE(account_te_agg.success_count, 0)::bigint AS success_count,
+            COALESCE(account_te_agg.duration_sec, 0)::float AS duration_sec,
+            COALESCE(account_te_agg.comments, 0)::bigint AS comments,
+            COALESCE(account_te_agg.likes, 0)::bigint AS likes,
+            COALESCE(account_te_agg.saves, 0)::bigint AS saves,
+            COALESCE(account_te_agg.dms, 0)::bigint AS dms,
+            COALESCE(account_te_agg.reach, 0)::bigint AS reach,
+            COALESCE(account_credit_agg.total_credits, 0)::bigint AS total_credits
+        FROM users u
+        LEFT JOIN account_te_agg ON account_te_agg.user_id = u.id
+        LEFT JOIN account_credit_agg ON account_credit_agg.user_id = u.id
+        WHERE u.tenant_id = $1
+          AND NOT u.is_deleted
+        ORDER BY COALESCE(account_te_agg.exec_count, 0) DESC, u.id
+        """,
+        tenant_id, cur_start, cur_end,
+    )
+    skill_rows = await pool.fetch(
+        f"""
+        WITH skill_te_agg AS (
             SELECT
-                device_te_agg.device_id,
-                device_te_agg.exec_count,
-                device_te_agg.success_count,
-                device_te_agg.fail_count,
-                device_te_agg.duration_sec,
-                device_te_agg.comments,
-                device_te_agg.likes,
-                device_te_agg.saves,
-                device_te_agg.dms,
-                device_te_agg.reach,
-                COALESCE(device_credit_agg.total_credits, 0)::bigint AS total_credits
-            FROM device_te_agg
-            LEFT JOIN device_credit_agg ON device_credit_agg.device_id = device_te_agg.device_id
-            ORDER BY device_te_agg.exec_count DESC, device_te_agg.device_id
-            """,
-            tenant_id, cur_start, cur_end,
+                te.task_id AS skill_id,
+                COUNT(te.id)::bigint AS exec_count,
+                COUNT(te.id) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success_count,
+                COUNT(te.id) FILTER (WHERE te.execution_result = 'FAILED')::bigint AS fail_count,
+                COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float AS duration_sec,
+                COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
+                COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
+                COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
+                COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
+                COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
+            FROM task_execution te
+            LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
+            JOIN users u ON u.id = te.user_id
+            WHERE u.tenant_id = $1
+              AND te.task_id IS NOT NULL
+              AND COALESCE(te.finished_at, te.started_at) >= $2
+              AND COALESCE(te.finished_at, te.started_at) < $3
+              AND NOT te.is_deleted
+              AND NOT u.is_deleted
+            GROUP BY te.task_id
         ),
-        pool.fetch(
-            """
-            SELECT te.device_id,
-                   COALESCE(ebs.platform::text, 'OTHER') AS platform,
-                   COUNT(*)::bigint AS exec_count,
-                   COUNT(*) FILTER (WHERE te.execution_result = 'FAILED')::bigint AS fail_count
+        skill_credit_agg AS (
+            SELECT
+                te.task_id AS skill_id,
+                COALESCE(SUM(ur.credits_used), 0)::bigint AS total_credits
+            FROM task_execution te
+            JOIN users u ON u.id = te.user_id
+            LEFT JOIN usage_record ur
+                -- schema mismatch: usage_record.task_id is varchar while task_execution.id is int; a future migration should align these column types.
+                ON ur.task_id = te.id::varchar
+            WHERE u.tenant_id = $1
+              AND te.task_id IS NOT NULL
+              AND COALESCE(te.finished_at, te.started_at) >= $2
+              AND COALESCE(te.finished_at, te.started_at) < $3
+              AND NOT te.is_deleted
+              AND NOT u.is_deleted
+            GROUP BY te.task_id
+        )
+        SELECT
+            ut.id AS skill_id,
+            ut.task_name AS skill_name,
+            CASE
+                WHEN (
+                    COALESCE(skill_te_agg.comments, 0) +
+                    COALESCE(skill_te_agg.likes, 0) +
+                    COALESCE(skill_te_agg.saves, 0) +
+                    COALESCE(skill_te_agg.dms, 0) +
+                    COALESCE(skill_te_agg.reach, 0)
+                ) > 0 THEN 'acquire'
+                ELSE 'ops'
+            END AS task_group,
+            ut.related_platforms,
+            ut.task_description AS description,
+            COALESCE(skill_te_agg.exec_count, 0)::bigint AS exec_count,
+            COALESCE(skill_te_agg.success_count, 0)::bigint AS success_count,
+            COALESCE(skill_te_agg.fail_count, 0)::bigint AS fail_count,
+            COALESCE(skill_te_agg.duration_sec, 0)::float AS duration_sec,
+            COALESCE(skill_te_agg.comments, 0)::bigint AS comments,
+            COALESCE(skill_te_agg.likes, 0)::bigint AS likes,
+            COALESCE(skill_te_agg.saves, 0)::bigint AS saves,
+            COALESCE(skill_te_agg.dms, 0)::bigint AS dms,
+            COALESCE(skill_te_agg.reach, 0)::bigint AS reach,
+            COALESCE(skill_credit_agg.total_credits, 0)::bigint AS total_credits
+        FROM user_task ut
+        JOIN users u ON u.id = ut.user_id
+        LEFT JOIN skill_te_agg ON skill_te_agg.skill_id = ut.id
+        LEFT JOIN skill_credit_agg ON skill_credit_agg.skill_id = ut.id
+        WHERE u.tenant_id = $1
+          AND NOT ut.is_deleted
+          AND NOT u.is_deleted
+          AND COALESCE(skill_te_agg.exec_count, 0) > 0
+        ORDER BY COALESCE(skill_te_agg.exec_count, 0) DESC, ut.id
+        """,
+        tenant_id, cur_start, cur_end,
+    )
+    device_rows = await pool.fetch(
+        f"""
+        WITH device_te_agg AS (
+            SELECT
+                te.device_id,
+                COUNT(*)::bigint AS exec_count,
+                COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success_count,
+                COUNT(*) FILTER (WHERE te.execution_result = 'FAILED')::bigint AS fail_count,
+                COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float AS duration_sec,
+                COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
+                COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
+                COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
+                COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
+                COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
             FROM task_execution te
             LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
             JOIN users u ON u.id = te.user_id
@@ -856,11 +799,62 @@ async def aggregate_aggregations(
               AND te.device_id IS NOT NULL
               AND COALESCE(te.finished_at, te.started_at) >= $2
               AND COALESCE(te.finished_at, te.started_at) < $3
-              AND NOT te.is_deleted AND NOT u.is_deleted
-            GROUP BY te.device_id, ebs.platform
-            """,
-            tenant_id, cur_start, cur_end,
+              AND NOT te.is_deleted
+              AND NOT u.is_deleted
+            GROUP BY te.device_id
         ),
+        device_credit_agg AS (
+            SELECT
+                te.device_id,
+                COALESCE(SUM(ur.credits_used), 0)::bigint AS total_credits
+            FROM task_execution te
+            JOIN users u ON u.id = te.user_id
+            LEFT JOIN usage_record ur
+                -- schema mismatch: usage_record.task_id is varchar while task_execution.id is int; a future migration should align these column types.
+                ON ur.task_id = te.id::varchar
+            WHERE u.tenant_id = $1
+              AND te.device_id IS NOT NULL
+              AND COALESCE(te.finished_at, te.started_at) >= $2
+              AND COALESCE(te.finished_at, te.started_at) < $3
+              AND NOT te.is_deleted
+              AND NOT u.is_deleted
+            GROUP BY te.device_id
+        )
+        SELECT
+            device_te_agg.device_id,
+            device_te_agg.exec_count,
+            device_te_agg.success_count,
+            device_te_agg.fail_count,
+            device_te_agg.duration_sec,
+            device_te_agg.comments,
+            device_te_agg.likes,
+            device_te_agg.saves,
+            device_te_agg.dms,
+            device_te_agg.reach,
+            COALESCE(device_credit_agg.total_credits, 0)::bigint AS total_credits
+        FROM device_te_agg
+        LEFT JOIN device_credit_agg ON device_credit_agg.device_id = device_te_agg.device_id
+        ORDER BY device_te_agg.exec_count DESC, device_te_agg.device_id
+        """,
+        tenant_id, cur_start, cur_end,
+    )
+    heat_rows = await pool.fetch(
+        """
+        SELECT te.device_id,
+               COALESCE(ebs.platform::text, 'OTHER') AS platform,
+               COUNT(*)::bigint AS exec_count,
+               COUNT(*) FILTER (WHERE te.execution_result = 'FAILED')::bigint AS fail_count
+        FROM task_execution te
+        LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
+        JOIN users u ON u.id = te.user_id
+        WHERE u.tenant_id = $1
+          AND te.device_id IS NOT NULL
+          AND COALESCE(te.finished_at, te.started_at) >= $2
+          AND COALESCE(te.finished_at, te.started_at) < $3
+          AND NOT te.is_deleted AND NOT u.is_deleted
+        GROUP BY te.device_id, ebs.platform
+        """,
+        tenant_id, cur_start, cur_end,
     )
 
     accounts = []
@@ -1023,80 +1017,78 @@ async def aggregate_charts(
           AND NOT te.is_deleted AND NOT u.is_deleted
     """
 
-    platform_rows, interaction_rows, cur_totals, cur_credits, duration_row, prev_totals, prev_credits, prev_duration_row = await asyncio.gather(
-        pool.fetch(
-            """
-            WITH platform_te_agg AS (
-                SELECT
-                    COALESCE(ebs.platform::text, 'OTHER') AS platform,
-                    COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
-                FROM task_execution te
-                LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
-                JOIN users u ON u.id = te.user_id
-                WHERE u.tenant_id = $1
-                  AND COALESCE(te.finished_at, te.started_at) >= $2
-                  AND COALESCE(te.finished_at, te.started_at) < $3
-                  AND NOT te.is_deleted
-                  AND NOT u.is_deleted
-                GROUP BY COALESCE(ebs.platform::text, 'OTHER')
-            )
-            SELECT platform, reach
-            FROM platform_te_agg
-            WHERE reach > 0
-            ORDER BY reach DESC, platform
-            """,
-            tenant_id, cur_start, cur_end,
-        ),
-        pool.fetch(
-            """
-            WITH interaction_te_agg AS (
-                SELECT
-                    COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
-                    COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
-                    COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
-                    COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms
-                FROM task_execution te
-                LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
-                JOIN users u ON u.id = te.user_id
-                WHERE u.tenant_id = $1
-                  AND COALESCE(te.finished_at, te.started_at) >= $2
-                  AND COALESCE(te.finished_at, te.started_at) < $3
-                  AND NOT te.is_deleted
-                  AND NOT u.is_deleted
-            )
-            SELECT 'comments'::text AS key, comments AS value FROM interaction_te_agg
-            UNION ALL
-            SELECT 'likes'::text AS key, likes AS value FROM interaction_te_agg
-            UNION ALL
-            SELECT 'saves'::text AS key, saves AS value FROM interaction_te_agg
-            UNION ALL
-            SELECT 'dms'::text AS key, dms AS value FROM interaction_te_agg
-            """,
-            tenant_id, cur_start, cur_end,
-        ),
-        _resolve_async_value(
-            _cur_totals
-            if _cur_totals is not None
-            else _fetch_period_totals(pool, tenant_id, cur_start, cur_end)
-        ),
-        _resolve_async_value(
-            _cur_credits
-            if _cur_credits is not None
-            else _fetch_period_credits(pool, tenant_id, cur_start, cur_end)
-        ),
-        pool.fetchrow(duration_sql, tenant_id, cur_start, cur_end),
-        _resolve_async_value(
-            _prev_totals
-            if _prev_totals is not None
-            else _fetch_period_totals(pool, tenant_id, prev_start, prev_end)
-        ),
-        _resolve_async_value(
-            _prev_credits
-            if _prev_credits is not None
-            else _fetch_period_credits(pool, tenant_id, prev_start, prev_end)
-        ),
-        pool.fetchrow(duration_sql, tenant_id, prev_start, prev_end),
+    platform_rows = await pool.fetch(
+        """
+        WITH platform_te_agg AS (
+            SELECT
+                COALESCE(ebs.platform::text, 'OTHER') AS platform,
+                COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
+            FROM task_execution te
+            LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
+            JOIN users u ON u.id = te.user_id
+            WHERE u.tenant_id = $1
+              AND COALESCE(te.finished_at, te.started_at) >= $2
+              AND COALESCE(te.finished_at, te.started_at) < $3
+              AND NOT te.is_deleted
+              AND NOT u.is_deleted
+            GROUP BY COALESCE(ebs.platform::text, 'OTHER')
+        )
+        SELECT platform, reach
+        FROM platform_te_agg
+        WHERE reach > 0
+        ORDER BY reach DESC, platform
+        """,
+        tenant_id, cur_start, cur_end,
     )
+    interaction_rows = await pool.fetch(
+        """
+        WITH interaction_te_agg AS (
+            SELECT
+                COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
+                COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
+                COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
+                COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms
+            FROM task_execution te
+            LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = te.id
+            JOIN users u ON u.id = te.user_id
+            WHERE u.tenant_id = $1
+              AND COALESCE(te.finished_at, te.started_at) >= $2
+              AND COALESCE(te.finished_at, te.started_at) < $3
+              AND NOT te.is_deleted
+              AND NOT u.is_deleted
+        )
+        SELECT 'comments'::text AS key, comments AS value FROM interaction_te_agg
+        UNION ALL
+        SELECT 'likes'::text AS key, likes AS value FROM interaction_te_agg
+        UNION ALL
+        SELECT 'saves'::text AS key, saves AS value FROM interaction_te_agg
+        UNION ALL
+        SELECT 'dms'::text AS key, dms AS value FROM interaction_te_agg
+        """,
+        tenant_id, cur_start, cur_end,
+    )
+    cur_totals = await _resolve_async_value(
+        _cur_totals
+        if _cur_totals is not None
+        else _fetch_period_totals(pool, tenant_id, cur_start, cur_end)
+    )
+    cur_credits = await _resolve_async_value(
+        _cur_credits
+        if _cur_credits is not None
+        else _fetch_period_credits(pool, tenant_id, cur_start, cur_end)
+    )
+    duration_row = await pool.fetchrow(duration_sql, tenant_id, cur_start, cur_end)
+    prev_totals = await _resolve_async_value(
+        _prev_totals
+        if _prev_totals is not None
+        else _fetch_period_totals(pool, tenant_id, prev_start, prev_end)
+    )
+    prev_credits = await _resolve_async_value(
+        _prev_credits
+        if _prev_credits is not None
+        else _fetch_period_credits(pool, tenant_id, prev_start, prev_end)
+    )
+    prev_duration_row = await pool.fetchrow(duration_sql, tenant_id, prev_start, prev_end)
     platform_breakdown = []
     for r in platform_rows:
         meta = PLATFORM_META.get(r["platform"], {"name": r["platform"] or "其他", "color": "#999999"})
@@ -1197,47 +1189,64 @@ async def _actual_aggregate_snapshot(
 ) -> dict[str, Any]:
     window = _resolve_window(range_param, start, end)
     cur_start, cur_end, prev_start, prev_end, _, unit, _ = window
-    cur_totals_task = asyncio.create_task(_fetch_period_totals(pool, tenant_id, cur_start, cur_end))
-    prev_totals_task = asyncio.create_task(_fetch_period_totals(pool, tenant_id, prev_start, prev_end))
-    cur_credits_task = asyncio.create_task(_fetch_period_credits(pool, tenant_id, cur_start, cur_end))
-    prev_credits_task = asyncio.create_task(_fetch_period_credits(pool, tenant_id, prev_start, prev_end))
-    ops_trend_task = asyncio.create_task(_fetch_ops_trend(pool, tenant_id, cur_start, cur_end, unit))
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            cur_totals = await _fetch_period_totals(conn, tenant_id, cur_start, cur_end)
+            prev_totals = await _fetch_period_totals(conn, tenant_id, prev_start, prev_end)
+            cur_credits = await _fetch_period_credits(conn, tenant_id, cur_start, cur_end)
+            prev_credits = await _fetch_period_credits(conn, tenant_id, prev_start, prev_end)
+            highlights = await aggregate_highlights(
+                conn,
+                tenant_id,
+                range_param,
+                start,
+                end,
+                _window=window,
+                _prev_totals=prev_totals,
+            )
+            achievements = await aggregate_achievements(
+                conn,
+                tenant_id,
+                range_param,
+                start,
+                end,
+                _window=window,
+                _cur_totals=cur_totals,
+                _prev_totals=prev_totals,
+            )
+            aggs = await aggregate_aggregations(conn, tenant_id, range_param, start, end, _window=window)
+            charts = await aggregate_charts(
+                conn,
+                tenant_id,
+                range_param,
+                start,
+                end,
+                _window=window,
+                _cur_totals=cur_totals,
+                _cur_credits=cur_credits,
+                _prev_totals=prev_totals,
+                _prev_credits=prev_credits,
+            )
+            ops_trend = await _fetch_ops_trend(conn, tenant_id, cur_start, cur_end, unit)
+            members = await get_members(conn, tenant_id)
+            wallet = await get_wallet(conn, tenant_id)
+            transactions = await _actual_get_transactions(conn, 1, 20, tenant_id)
+            stats_task_rows = await stats_tasks(conn, tenant_id)
+            audit_log = await _actual_get_audit_log(conn, tenant_id, 1, 20)
 
-    highlights, achievements, aggs, charts, ops_trend = await asyncio.gather(
-        aggregate_highlights(pool, tenant_id, range_param, start, end, _window=window, _prev_totals=prev_totals_task),
-        aggregate_achievements(
-            pool,
-            tenant_id,
-            range_param,
-            start,
-            end,
-            _window=window,
-            _cur_totals=cur_totals_task,
-            _prev_totals=prev_totals_task,
-        ),
-        aggregate_aggregations(pool, tenant_id, range_param, start, end, _window=window),
-        aggregate_charts(
-            pool,
-            tenant_id,
-            range_param,
-            start,
-            end,
-            _window=window,
-            _cur_totals=cur_totals_task,
-            _cur_credits=cur_credits_task,
-            _prev_totals=prev_totals_task,
-            _prev_credits=prev_credits_task,
-        ),
-        ops_trend_task,
-    )
-    return {
-        "range": range_param,
-        "highlights": highlights,
-        "achievements": achievements,
-        "aggs": aggs,
-        "charts": charts,
-        "ops_trend": ops_trend,
-    }
+            return {
+                "range": range_param,
+                "highlights": highlights,
+                "achievements": achievements,
+                "aggs": aggs,
+                "charts": charts,
+                "ops_trend": ops_trend,
+                "members": members,
+                "wallet": wallet,
+                "transactions": transactions,
+                "stats_tasks": stats_task_rows,
+                "audit_log": audit_log,
+            }
 
 
 async def aggregate_snapshot(
@@ -2064,17 +2073,16 @@ async def _actual_get_transactions(
 
     limit_index = len(query_args) + 1
     offset_index = len(query_args) + 2
-    total, rows = await asyncio.gather(
-        pool.fetchval(
-            f"""
+    total = await pool.fetchval(
+        f"""
             {base_cte}
-            SELECT COUNT(*)::bigint AS total
-            FROM combined_rows sub
-            {where_clause}
-            """,
-            *query_args,
-        ),
-        pool.fetch(
+        SELECT COUNT(*)::bigint AS total
+        FROM combined_rows sub
+        {where_clause}
+        """,
+        *query_args,
+    )
+    rows = await pool.fetch(
         f"""
         SELECT
             sub.change_type,
@@ -2098,7 +2106,6 @@ async def _actual_get_transactions(
         *query_args,
         page_size,
         offset,
-        ),
     )
 
     items = []
@@ -2601,24 +2608,22 @@ async def _actual_get_audit_log(
     )
     limit_index = len(query_args) + 1
     offset_index = len(query_args) + 2
-    total, rows = await asyncio.gather(
-        pool.fetchval(
-            f"SELECT COUNT(*)::bigint FROM enterprise_audit_log {where_clause}",
-            *query_args,
+    total = await pool.fetchval(
+        f"SELECT COUNT(*)::bigint FROM enterprise_audit_log {where_clause}",
+        *query_args,
+    )
+    rows = await pool.fetch(
+        """SELECT id, operator_id, operator_name, action, target_user_id, target_user_name,
+                  credits_amount, before_snapshot, after_snapshot, remark, created_at
+           FROM enterprise_audit_log {where_clause}
+           ORDER BY created_at DESC LIMIT {limit_param} OFFSET {offset_param}""".format(
+            where_clause=where_clause,
+            limit_param=f"${limit_index}",
+            offset_param=f"${offset_index}",
         ),
-        pool.fetch(
-            """SELECT id, operator_id, operator_name, action, target_user_id, target_user_name,
-                      credits_amount, before_snapshot, after_snapshot, remark, created_at
-               FROM enterprise_audit_log {where_clause}
-               ORDER BY created_at DESC LIMIT {limit_param} OFFSET {offset_param}""".format(
-                where_clause=where_clause,
-                limit_param=f"${limit_index}",
-                offset_param=f"${offset_index}",
-            ),
-            *query_args,
-            page_size,
-            offset,
-        ),
+        *query_args,
+        page_size,
+        offset,
     )
     items = []
     for row in rows:

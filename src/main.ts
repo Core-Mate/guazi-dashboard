@@ -11,26 +11,22 @@ import { setRange, openDatePickerModal, setDatePreset, applyCustomRange, renderC
 import { renderScenarioCards, renderScenarioCardsFull, toggleScenario, toggleScenarioFull, initScenarioDropdown, flipScenario, exportScenarioCSV, sortScenario, searchScenario, renderSkillGroupsFromAggs } from './modules/scenarios'
 import { renderDeviceMonitor, toggleDeviceSection, updateDeviceBadge, renderDeviceMetricsTable, searchDevice, exportDeviceCSV, renderDevicesFromAggs } from './modules/devices'
 import { renderAchievements, tiltAchieve, resetAchieve } from './modules/achievements'
-import { switchRecordTab, renderTransactions, renderOplog, changePageSize, goPage, exportTransactions, exportOplog, paginationState, renderRecordTab, sortTransactions, sortOplog } from './modules/records'
+import { switchRecordTab, renderTransactions, renderOplog, changePageSize, goPage, exportTransactions, exportOplog, paginationState, renderRecordTab, sortTransactions, sortOplog, applyTransactionsSnapshot, applyOplogSnapshot } from './modules/records'
 import { openDrawer, closeDrawer, switchDrawerTab } from './modules/drawer'
 import { openModal, closeModal, showToast } from './modules/modal-toast'
 import { renderMembers, openAddMemberModal, addMember, openManageMemberModal, saveManageMember, confirmRemoveMember, removeMember, toggleMemberSelect, toggleSelectAllMembers, cancelBatchSelect, openBatchDistributeModal, confirmBatchDistribute, confirmBatchRemove, executeBatchRemove, sortMembers } from './modules/members'
 import { openDistributeToMember, openDistributeModal, confirmDistribute, renderOverviewOplog } from './modules/wallet'
 import { initROICard, generateReport, closeReportPreview, saveReportImage, switchReportDim, renderROIPlatformCard, renderRoiFromCharts } from './modules/reports'
 import { renderAccountMetricsTable, searchAccount, exportAccountCSV, renderAccountsFromAggs } from './modules/accounts'
-import { initCustomDropdowns } from './modules/dropdown'
+import { initCustomDropdowns, rebuildCustomDropdown } from './modules/dropdown'
 import { showLoader, hideLoader } from './modules/loader'
 import { bindRidgelineToggle, refreshRidgeline } from './modules/ridgeline-bind'
 import { pTag, initFilters, renderTaskTable, animateAllNumbers, getToday, getStatNum, setStatNum, prependTransaction, formatCompareText } from './modules/utils'
-import { tryLiveMembers, tryLiveWallet, tryLiveTransactions, populateMemberFilter, fetchDashboardData, applyBetaOverlays, clearDashboardSnapshotCache } from './modules/api-integration'
+import { applyMembersData, applyWalletData, fetchDashboardData, applyBetaOverlays, clearDashboardSnapshotCache, normalizeTransactions, normalizeAuditLog } from './modules/api-integration'
 import { PLATFORM_BREAKDOWN } from './data/platforms'
 import { INTERACTION_BREAKDOWN } from './data/charts'
 
 type DashboardCustomRange = { start: string; end: string } | undefined
-
-type DashboardRefreshOptions = {
-  includeAncillary?: boolean
-}
 
 var dashboardViewState: { range: string; custom?: DashboardCustomRange } = {
   range: '7d',
@@ -185,10 +181,31 @@ function setDashboardViewState(range: string, custom?: DashboardCustomRange) {
     : undefined
 }
 
+function resetSnapshotRecordState() {
+  paginationState.transactions.page = 1
+  paginationState.transactions.pageSize = 20
+  paginationState.transactions.dateStart = ''
+  paginationState.transactions.dateEnd = ''
+  paginationState.oplog.page = 1
+  paginationState.oplog.pageSize = 20
+  paginationState.oplog.dateStart = ''
+  paginationState.oplog.dateEnd = ''
+
+  var txTypeFilter = document.getElementById('transTypeFilter') as HTMLSelectElement | null
+  if (txTypeFilter) {
+    txTypeFilter.value = ''
+    rebuildCustomDropdown('transTypeFilter')
+  }
+  var oplogTypeFilter = document.getElementById('oplogTypeFilter') as HTMLSelectElement | null
+  if (oplogTypeFilter) {
+    oplogTypeFilter.value = ''
+    rebuildCustomDropdown('oplogTypeFilter')
+  }
+}
+
 export async function refreshDashboard(
   range?: string,
   custom?: DashboardCustomRange,
-  options?: DashboardRefreshOptions,
 ) {
   var targetRange = range || dashboardViewState.range || '7d'
   var targetCustom = targetRange === 'custom'
@@ -219,19 +236,17 @@ export async function refreshDashboard(
   applyBetaOverlays()
   var opsData = snapshotOpsToChartData(snap)
   if (opsData) updateCharts(targetRange, opsData)
-  if (options && options.includeAncillary === false) return snap
-  await Promise.allSettled([
-    tryLiveMembers(),
-    tryLiveWallet(),
-    renderTransactions(paginationState.transactions.page, paginationState.transactions.pageSize),
-    renderOplog(paginationState.oplog.page, paginationState.oplog.pageSize),
-    renderOverviewOplog(),
-  ])
+  resetSnapshotRecordState()
+  applyMembersData(snap.members, false)
+  applyWalletData(snap.wallet)
+  applyTransactionsSnapshot(normalizeTransactions(snap.transactions), 1, 20)
+  applyOplogSnapshot(normalizeAuditLog(snap.audit_log), 1, 20, 10)
+  await renderTaskTable(snap.stats_tasks)
   return snap
 }
 
 async function bootDashboardSnapshot(range = '7d', custom?: { start: string; end: string }) {
-  return refreshDashboard(range, custom, { includeAncillary: false })
+  return refreshDashboard(range, custom)
 }
 
 // Expose all functions to window for inline onclick handlers
@@ -286,18 +301,9 @@ document.addEventListener('DOMContentLoaded', async function() {
   initCustomDropdowns();
 
   // Preloader: await all live data before revealing content
-  await Promise.allSettled([
-    bootDashboardSnapshot(initialRange),
-    tryLiveMembers(),
-    tryLiveWallet(),
-    tryLiveTransactions(),
-    renderTaskTable(),
-  ]);
+  await bootDashboardSnapshot(initialRange);
 
   bindHighlightReflow();
-
-  // Populate member filter dropdown with live data
-  populateMemberFilter();
 
   // Force-hide preloader regardless of pendingCount balance
   // (some setRange/boot paths can drift the counter; for the initial

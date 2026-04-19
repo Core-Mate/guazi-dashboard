@@ -128,6 +128,32 @@ function applyOplogState(data) {
   replaceOplogData(oplogState.items)
 }
 
+export function applyTransactionsSnapshot(data, page?, pageSize?) {
+  var state = paginationState.transactions
+  state.page = typeof page === 'number' ? page : 1
+  state.pageSize = typeof pageSize === 'number' ? pageSize : 20
+  applyTransactionState({
+    items: Array.isArray(data && data.items) ? data.items : [],
+    total: Number(data && data.total) || 0,
+  })
+  _transactionsLoaded = true
+  paintTransactions()
+}
+
+export function applyOplogSnapshot(data, page?, pageSize?, overviewLimit?) {
+  var state = paginationState.oplog
+  state.page = typeof page === 'number' ? page : 1
+  state.pageSize = typeof pageSize === 'number' ? pageSize : 20
+  applyOplogState({
+    items: Array.isArray(data && data.items) ? data.items : [],
+    total: Number(data && data.total) || 0,
+  })
+  _oplogLoaded = true
+  paintOplog()
+  if (typeof overviewLimit === 'number') overviewOplogLimit = overviewLimit
+  paintOverviewOplog(oplogState.items, overviewOplogLimit)
+}
+
 function clampRecordPage(tab, totalItems) {
   var state = paginationState[tab]
   var totalPages = Math.max(1, Math.ceil(totalItems / state.pageSize))

@@ -51,6 +51,7 @@ export interface SkillTotals {
 }
 
 export interface DashboardSnapshot {
+  range: string;
   highlights: { range: string; compare_label: string; cards: HighlightCard[] };
   achievements: { range: string; compare_label: string; achievements: any[] };
   aggs: {
@@ -90,6 +91,22 @@ export interface DashboardSnapshot {
     devices: any[];
     totals: any;
   };
+  members: any[];
+  wallet: {
+    total_balance: number;
+    total_recharged: number;
+    total_consumed: number;
+    member_count: number;
+  };
+  transactions: {
+    items: any[];
+    total: number;
+  };
+  stats_tasks: any[];
+  audit_log: {
+    items: any[];
+    total: number;
+  };
 }
 
 var SNAPSHOT_CACHE_TTL = 30000;
@@ -112,6 +129,7 @@ var EMPTY_OPS_DATA = {
 };
 
 export const EMPTY_SNAPSHOT: DashboardSnapshot = {
+  range: '',
   highlights: {
     range: '',
     compare_label: '',
@@ -159,10 +177,55 @@ export const EMPTY_SNAPSHOT: DashboardSnapshot = {
     devices: [],
     totals: {},
   },
+  members: [],
+  wallet: {
+    total_balance: 0,
+    total_recharged: 0,
+    total_consumed: 0,
+    member_count: 0,
+  },
+  transactions: {
+    items: [],
+    total: 0,
+  },
+  stats_tasks: [],
+  audit_log: {
+    items: [],
+    total: 0,
+  },
 };
 
 function cloneSnapshot(snapshot: DashboardSnapshot): DashboardSnapshot {
   return JSON.parse(JSON.stringify(snapshot));
+}
+
+function normalizeDashboardSnapshot(data: any, range: string): DashboardSnapshot {
+  var base = cloneSnapshot(EMPTY_SNAPSHOT);
+  return {
+    range: typeof (data && data.range) === 'string' ? data.range : range,
+    highlights: data && data.highlights ? data.highlights : base.highlights,
+    achievements: data && data.achievements ? data.achievements : base.achievements,
+    aggs: data && data.aggs ? data.aggs : base.aggs,
+    charts: data && data.charts ? data.charts : base.charts,
+    ops_trend: data && data.ops_trend ? data.ops_trend : base.ops_trend,
+    aggregations: data && data.aggregations ? data.aggregations : base.aggregations,
+    members: Array.isArray(data && data.members) ? data.members : base.members,
+    wallet: data && data.wallet ? {
+      total_balance: Number(data.wallet.total_balance) || 0,
+      total_recharged: Number(data.wallet.total_recharged) || 0,
+      total_consumed: Number(data.wallet.total_consumed) || 0,
+      member_count: Number(data.wallet.member_count) || 0,
+    } : base.wallet,
+    transactions: data && data.transactions ? {
+      items: Array.isArray(data.transactions.items) ? data.transactions.items : [],
+      total: Number(data.transactions.total) || 0,
+    } : base.transactions,
+    stats_tasks: Array.isArray(data && data.stats_tasks) ? data.stats_tasks : base.stats_tasks,
+    audit_log: data && data.audit_log ? {
+      items: Array.isArray(data.audit_log.items) ? data.audit_log.items : [],
+      total: Number(data.audit_log.total) || 0,
+    } : base.audit_log,
+  };
 }
 
 function snapshotCacheKey(range: string, custom?: { start?: string; end?: string }, tenantId?: string) {
@@ -325,60 +388,12 @@ export async function fetchDashboardData(
         query.set('start', custom.start)
         query.set('end', custom.end || '')
       }
-      var qs = query.toString();
-      var headers = getDashboardApiHeaders();
-      if (!headers) {
+      var rawData = await fetchDashboardJSON<any>('/api/dashboard/snapshot', '数据加载失败', query, resolvedTenantId);
+      if (!rawData) {
         delete snapshotCache[key];
-        showDashboardError('数据加载失败：' + MISSING_API_KEY_MESSAGE);
         return cloneSnapshot(EMPTY_SNAPSHOT);
       }
-      var emptyHighlights = {
-        highlights: EMPTY_SNAPSHOT.highlights,
-        achievements: EMPTY_SNAPSHOT.achievements,
-      };
-      var emptyOpsTrend = EMPTY_SNAPSHOT.ops_trend || {
-        labels: [],
-        dates: [],
-        exec: [],
-        success: [],
-        failed: [],
-        total: [],
-        credits: [],
-        reach: [],
-        comments: [],
-        likes: [],
-        saves: [],
-        dms: [],
-        runtime_h: [],
-      };
-      function fetchPart<T>(path: string, fallback: T): Promise<T> {
-        return fetch(path + '?' + qs, { headers: headers })
-          .then(function(res) {
-            if (!res.ok) throw new Error('HTTP ' + res.status);
-            return res.json();
-          })
-          .catch(function() {
-            return fallback;
-          });
-      }
-      var result = await Promise.all([
-        fetchPart('/api/dashboard/highlights', emptyHighlights),
-        fetchPart('/api/dashboard/charts', EMPTY_SNAPSHOT.charts),
-        fetchPart('/api/dashboard/aggs', EMPTY_SNAPSHOT.aggs),
-        fetchPart('/api/dashboard/ops_trend', emptyOpsTrend),
-      ]);
-      var hl = result[0];
-      var charts = result[1];
-      var aggs = result[2];
-      var ops = result[3];
-      var data = {
-        range: range,
-        highlights: hl.highlights,
-        achievements: hl.achievements,
-        charts: charts,
-        aggs: aggs,
-        ops_trend: ops,
-      };
+      var data = normalizeDashboardSnapshot(rawData, range);
       clearDashboardError();
       snapshotCache[key] = { expiresAt: Date.now() + SNAPSHOT_CACHE_TTL, data: data };
       return cloneSnapshot(data);
@@ -441,7 +456,7 @@ function normalizeTransactionDesc(item: any) {
   return String(item.change_type || '—');
 }
 
-function normalizeTransactions(data: any): { items: any[]; total: number } {
+export function normalizeTransactions(data: any): { items: any[]; total: number } {
   var rawItems = Array.isArray(data && data.items) ? data.items : [];
   return {
     items: rawItems.map(function(item) {
@@ -493,7 +508,7 @@ function normalizeAuditResult(action: string) {
   return '已完成';
 }
 
-function normalizeAuditLog(data: any): { items: any[]; total: number } {
+export function normalizeAuditLog(data: any): { items: any[]; total: number } {
   var rawItems = Array.isArray(data && data.items) ? data.items : [];
   return {
     items: rawItems.map(function(item) {
@@ -689,10 +704,10 @@ export async function tryLiveOpsData(range: string, custom?: { start: string; en
   };
 }
 
-export async function tryLiveMembers() {
+export function applyMembersData(data: any[], preserveSelection: boolean = true) {
+  var rows = Array.isArray(data) ? data : [];
   membersData.length = 0;
-  var data = await fetchMembers();
-  data.forEach(function(m) {
+  rows.forEach(function(m) {
     membersData.push({
       id: m.id,
       name: m.username || '未知',
@@ -703,7 +718,7 @@ export async function tryLiveMembers() {
     });
   });
   renderMembers();
-  populateMemberFilter();
+  populateMemberFilter(preserveSelection);
 
   var countEl = document.getElementById('statMemberCount');
   if (countEl) countEl.textContent = membersData.length + '人';
@@ -723,14 +738,21 @@ export async function tryLiveMembers() {
   }
 }
 
+export async function tryLiveMembers() {
+  applyMembersData(await fetchMembers());
+}
+
+export function applyWalletData(data: any) {
+  var setIf = function(id, val) { var el = document.getElementById(id); if (el) el.textContent = val; };
+  setIf('statWallet', Math.round(Number(data && data.total_balance) || 0).toLocaleString());
+  setIf('statTopup', Math.round(Number(data && data.total_recharged) || 0).toLocaleString());
+  setIf('statConsumed', Math.round(Number(data && data.total_consumed) || 0).toLocaleString());
+}
+
 export async function tryLiveWallet() {
   var data = await apiFetchWallet();
   if (!data) return;
-
-  var setIf = function(id, val) { var el = document.getElementById(id); if (el) el.textContent = val; };
-  setIf('statWallet', Math.round(data.total_balance).toLocaleString());
-  setIf('statTopup', Math.round(data.total_recharged).toLocaleString());
-  setIf('statConsumed', Math.round(data.total_consumed).toLocaleString());
+  applyWalletData(data);
 }
 
 export async function tryLiveTransactions() {
@@ -761,7 +783,7 @@ export async function tryLiveAccounts() {
   renderAccountAcquireGroup();
 }
 
-export function populateMemberFilter() {
+export function populateMemberFilter(preserveSelection: boolean = true) {
   var selectId = 'txMemberFilter'
   var select = document.getElementById(selectId) as HTMLSelectElement;
   if (!select) return;
@@ -774,7 +796,7 @@ export function populateMemberFilter() {
     opt.dataset.phone = m.phone || '';
     select.appendChild(opt);
   });
-  if (existing) select.value = existing;
+  if (preserveSelection && existing) select.value = existing;
   rebuildCustomDropdown(selectId, {
     searchable: true,
     placeholder: '搜索成员...',

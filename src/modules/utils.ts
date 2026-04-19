@@ -47,40 +47,48 @@ export function initFilters() {
   }
 }
 
-export function renderTaskTable() {
+function paintTaskTable(items: any[], tbody: HTMLElement, paginationInfo: HTMLElement | null) {
+  taskRowsCache = Array.isArray(items) ? items.slice() : []
+  if (!taskRowsCache.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="padding:24px 12px;text-align:center;color:#94a3b8;">暂无任务数据</td></tr>'
+    if (paginationInfo) paginationInfo.textContent = '暂无任务数据'
+    return
+  }
+  if (paginationInfo) paginationInfo.textContent = '第 1 页，共 1 页（' + taskRowsCache.length + ' 条记录）'
+  tbody.innerHTML = taskRowsCache.map(function(task, i) {
+    var platforms = parseTaskPlatforms(task.related_platforms)
+    var platformHtml = platforms.length
+      ? platforms.map(function(name) { return pTag(name) }).join(' ')
+      : '<span class="text-na">未提供</span>'
+    var taskDisplayName = task.task_name || '未命名任务'
+    var taskDetailName = task.task_detail_name || '<span class="text-na">未提供</span>'
+    var successCount = Number(task.success_count || 0)
+    var totalExecutions = Number(task.total_executions || 0)
+    var failCount = Number(task.fail_count || 0)
+    var statusText = '完成 ' + successCount + ' / 总计 ' + totalExecutions + (failCount > 0 ? ' · 失败 ' + failCount : '')
+    return '<tr onclick="openDrawer(' + i + ')">' +
+      '<td class="td-bold">' + escapeHtml(taskDisplayName) + '</td>' +
+      '<td>' + (task.task_detail_name ? escapeHtml(taskDetailName) : taskDetailName) + '</td>' +
+      '<td>' + platformHtml + '</td>' +
+      '<td class="td-mono"><span class="text-na">未提供</span></td>' +
+      '<td><span class="badge-status badge-cancel">' + escapeHtml(statusText) + '</span></td>' +
+      '<td><span class="text-na">未提供</span></td>' +
+      '<td class="td-mono"><span class="text-na">未提供</span></td>' +
+      '<td class="text-muted"><span class="text-na">未提供</span></td>' +
+    '</tr>'
+  }).join('')
+}
+
+export function renderTaskTable(items?: any[]) {
   const tbody = document.getElementById('taskTableBody');
   const paginationInfo = document.getElementById('taskPaginationInfo');
   if (!tbody) return Promise.resolve()
+  if (Array.isArray(items)) {
+    paintTaskTable(items, tbody, paginationInfo)
+    return Promise.resolve()
+  }
   return fetchTaskSummaries().then(function(items) {
-    taskRowsCache = Array.isArray(items) ? items.slice() : []
-    if (!taskRowsCache.length) {
-      tbody.innerHTML = '<tr><td colspan="8" style="padding:24px 12px;text-align:center;color:#94a3b8;">暂无任务数据</td></tr>'
-      if (paginationInfo) paginationInfo.textContent = '暂无任务数据'
-      return
-    }
-    if (paginationInfo) paginationInfo.textContent = '第 1 页，共 1 页（' + taskRowsCache.length + ' 条记录）'
-    tbody.innerHTML = taskRowsCache.map(function(task, i) {
-      var platforms = parseTaskPlatforms(task.related_platforms)
-      var platformHtml = platforms.length
-        ? platforms.map(function(name) { return pTag(name) }).join(' ')
-        : '<span class="text-na">未提供</span>'
-      var taskDisplayName = task.task_name || '未命名任务'
-      var taskDetailName = task.task_detail_name || '<span class="text-na">未提供</span>'
-      var successCount = Number(task.success_count || 0)
-      var totalExecutions = Number(task.total_executions || 0)
-      var failCount = Number(task.fail_count || 0)
-      var statusText = '完成 ' + successCount + ' / 总计 ' + totalExecutions + (failCount > 0 ? ' · 失败 ' + failCount : '')
-      return '<tr onclick="openDrawer(' + i + ')">' +
-        '<td class="td-bold">' + escapeHtml(taskDisplayName) + '</td>' +
-        '<td>' + (task.task_detail_name ? escapeHtml(taskDetailName) : taskDetailName) + '</td>' +
-        '<td>' + platformHtml + '</td>' +
-        '<td class="td-mono"><span class="text-na">未提供</span></td>' +
-        '<td><span class="badge-status badge-cancel">' + escapeHtml(statusText) + '</span></td>' +
-        '<td><span class="text-na">未提供</span></td>' +
-        '<td class="td-mono"><span class="text-na">未提供</span></td>' +
-        '<td class="text-muted"><span class="text-na">未提供</span></td>' +
-      '</tr>'
-    }).join('')
+    paintTaskTable(items, tbody, paginationInfo)
   })
 }
 
