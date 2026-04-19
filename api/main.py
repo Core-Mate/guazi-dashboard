@@ -190,12 +190,12 @@ def _get_warmup_tenant_ids() -> list[int]:
         logger.warning("Invalid TENANT_ID for warmup: %s; falling back to tenant_id=1", fallback_tenant)
         return [1]
 
-async def _refill_hot_caches() -> None:
+async def _refill_hot_caches(ranges: Optional[tuple[str, ...]] = None) -> None:
     started_at = time.perf_counter()
     pool = await db.get_pool()
     queries = get_queries_module()
     tenants = _get_warmup_tenant_ids()
-    ranges = WARMUP_RANGES
+    ranges = ranges or WARMUP_RANGES
     for tenant_id in tenants:
         for range_value in ranges:
             cache_key = _dashboard_cache_key(tenant_id, range_value, None, None)
@@ -320,9 +320,9 @@ async def _hot_cache_tick_loop(interval_seconds: int = 60):
         await asyncio.sleep(interval_seconds)
 
 
-async def _warmup() -> None:
+async def _warmup(ranges: Optional[tuple[str, ...]] = None) -> None:
     try:
-        await _refill_hot_caches()
+        await _refill_hot_caches(ranges)
     except Exception:
         logger.exception("Dashboard snapshot warmup initialization failed")
 
@@ -363,20 +363,17 @@ async def lifespan(app: FastAPI):
     await db.init_pool()
     try:
         await startup_self_check()
+        await _warmup(("7d", "today"))
     except Exception:
         await db.close_pool()
         raise
-    warmup_task = asyncio.create_task(_warmup())
     tick_task = asyncio.create_task(_hot_cache_tick_loop(60))
     try:
         yield
     finally:
         tick_task.cancel()
-        warmup_task.cancel()
         with suppress(asyncio.CancelledError):
             await tick_task
-        with suppress(asyncio.CancelledError):
-            await warmup_task
         await db.close_pool()
 
 
@@ -556,7 +553,10 @@ async def _load_dashboard_highlights_bundle(
 ) -> dict[str, Any]:
     queries = get_queries_module()
     window = queries._resolve_window(range_param, start, end)
-    _, _, prev_start, prev_end, _, _, _ = window
+    cur_start, cur_end, prev_start, prev_end, _, _, _ = window
+    cur_totals_task = asyncio.create_task(
+        queries._fetch_period_totals(pool, tenant_id, cur_start, cur_end)
+    )
     prev_totals_task = asyncio.create_task(
         queries._fetch_period_totals(pool, tenant_id, prev_start, prev_end)
     )
@@ -577,6 +577,7 @@ async def _load_dashboard_highlights_bundle(
             start,
             end,
             _window=window,
+            _cur_totals=cur_totals_task,
             _prev_totals=prev_totals_task,
         ),
     )

@@ -266,21 +266,21 @@ async function main(): Promise<void> {
     await runVisual(
       "testHighlightPopoutVisual",
       testHighlightPopoutVisual,
-      'Does this screenshot show a dashboard metric card with a visible number and label? Return {"pass": boolean, "reason": string}',
+      'Does this screenshot show a dashboard metric card with its hover popout or floating detail bubble visibly expanded near the metric, while the metric number and label remain readable? Return {"pass": boolean, "reason": string}',
     ),
   );
   results.push(
     await runVisual(
       "testRidgelineVisual",
       testRidgelineVisual,
-      'Does this screenshot show a Joy Division-style ridgeline chart with multiple stacked area curves? Return {"pass": boolean, "reason": string}',
+      'Does this screenshot show a ridgeline chart with multiple vertically stacked filled curves sharing the same horizontal timeline, rather than a single line or bar chart? Return {"pass": boolean, "reason": string}',
     ),
   );
   results.push(
     await runVisual(
       "testDragCompareVisual",
       testDragCompareVisual,
-      'Does this screenshot show a date range comparison with two periods highlighted? Return {"pass": boolean, "reason": string}',
+      'Does this screenshot show a chart during an active drag selection, with one continuous highlighted range or band, clear start and end boundary markers, and a summary tooltip or bubble at or near the cursor showing values for the selected period? Do not expect two separate highlighted periods or two comparison bands. Return {"pass": boolean, "reason": string}',
     ),
   );
 

@@ -844,6 +844,13 @@ export function setHighlightLoading() {
   });
 }
 
+function getAnimatedHighlightValue(from, target, value) {
+  if (Number.isInteger(from) && Number.isInteger(target)) {
+    return Math.round(value);
+  }
+  return value;
+}
+
 function countUpValue(el, item, duration) {
   var target = typeof item.value === 'number' ? item.value : parseFloat(String(item.value).replace(/[^\d.-]/g, ''));
   if (isNaN(target)) target = 0;
@@ -861,7 +868,7 @@ function countUpValue(el, item, duration) {
     }
     var progress = Math.min((ts - startTime) / duration, 1);
     var eased = 1 - Math.pow(1 - progress, 3);
-    var current = from + (target - from) * eased;
+    var current = getAnimatedHighlightValue(from, target, from + (target - from) * eased);
     el.textContent = formatValue({ value: current, unit: unit });
     if (progress < 1) requestAnimationFrame(step);
   }
@@ -996,8 +1003,15 @@ export function renderHighlightCards(cards: HighlightCard[], range?, customLen?)
         else {
           var displayNum = typeof c.value === 'number' ? c.value : parseFloat(String(c.value).replace(/[^\d.-]/g, ''));
           if (isNaN(displayNum)) displayNum = 0;
+          var from = parseFloat((valueEl.textContent || '0').replace(/[^\d.-]/g, '')) || 0;
           animateNumber(valueEl, displayNum, {
-            format: function(v) { return formatValue({ value: v, unit: c.unit || '' }); }
+            from: from,
+            format: function(v) {
+              return formatValue({
+                value: getAnimatedHighlightValue(from, displayNum, v),
+                unit: c.unit || ''
+              });
+            }
           });
         }
       }

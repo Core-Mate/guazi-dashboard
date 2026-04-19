@@ -294,36 +294,44 @@ async def _fetch_metric_buckets(
                 INTERVAL '{step}'
             ) AS bucket
         ),
-        ebs_per_te AS (
+        filtered_te AS (
             SELECT
-                execution_id,
-                SUM(comment_count) AS comment_count,
-                SUM(like_count) AS like_count,
-                SUM(collect_count) AS collect_count,
-                SUM(dm_count) AS dm_count,
-                SUM(unique_reach) AS unique_reach
-            FROM execution_behavior_stat
-            GROUP BY execution_id
-        ),
-        te_agg AS (
-            SELECT
-                DATE_TRUNC('{trunc}', COALESCE(te.finished_at, te.started_at) AT TIME ZONE 'Asia/Shanghai') AS bucket,
-                COUNT(*)::bigint AS executions,
-                COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS successes,
-                COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
-                COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
-                COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
-                COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
-                COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
+                te.id,
+                te.execution_result,
+                DATE_TRUNC('{trunc}', COALESCE(te.finished_at, te.started_at) AT TIME ZONE 'Asia/Shanghai') AS bucket
             FROM task_execution te
-            LEFT JOIN ebs_per_te ebs ON ebs.execution_id = te.id
             JOIN users u ON u.id = te.user_id
             WHERE u.tenant_id = $1
               AND COALESCE(te.finished_at, te.started_at) >= $2
               AND COALESCE(te.finished_at, te.started_at) < $3
               AND NOT te.is_deleted
               AND NOT u.is_deleted
-            GROUP BY DATE_TRUNC('{trunc}', COALESCE(te.finished_at, te.started_at) AT TIME ZONE 'Asia/Shanghai')
+        ),
+        ebs_per_te AS (
+            SELECT
+                ft.id AS execution_id,
+                COALESCE(SUM(ebs.comment_count), 0)::bigint AS comment_count,
+                COALESCE(SUM(ebs.like_count), 0)::bigint AS like_count,
+                COALESCE(SUM(ebs.collect_count), 0)::bigint AS collect_count,
+                COALESCE(SUM(ebs.dm_count), 0)::bigint AS dm_count,
+                COALESCE(SUM(ebs.unique_reach), 0)::bigint AS unique_reach
+            FROM filtered_te ft
+            LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = ft.id
+            GROUP BY ft.id
+        ),
+        te_agg AS (
+            SELECT
+                ft.bucket,
+                COUNT(*)::bigint AS executions,
+                COUNT(*) FILTER (WHERE {_success_filter_sql('ft')})::bigint AS successes,
+                COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
+                COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
+                COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
+                COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
+                COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
+            FROM filtered_te ft
+            LEFT JOIN ebs_per_te ebs ON ebs.execution_id = ft.id
+            GROUP BY ft.bucket
         )
         SELECT s.bucket,
                COALESCE(te_agg.executions, 0)::bigint AS executions,
@@ -353,34 +361,41 @@ async def _fetch_period_totals(
     """单段窗口总和（用于环比 prev 段）。"""
     row = await pool.fetchrow(
         f"""
-        WITH ebs_per_te AS (
+        WITH filtered_te AS (
             SELECT
-                execution_id,
-                SUM(comment_count) AS comment_count,
-                SUM(like_count) AS like_count,
-                SUM(collect_count) AS collect_count,
-                SUM(dm_count) AS dm_count,
-                SUM(unique_reach) AS unique_reach
-            FROM execution_behavior_stat
-            GROUP BY execution_id
-        ),
-        te_agg AS (
-            SELECT
-                COUNT(*)::bigint AS executions,
-                COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS successes,
-                COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
-                COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
-                COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
-                COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
-                COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
+                te.id,
+                te.execution_result
             FROM task_execution te
-            LEFT JOIN ebs_per_te ebs ON ebs.execution_id = te.id
             JOIN users u ON u.id = te.user_id
             WHERE u.tenant_id = $1
               AND COALESCE(te.finished_at, te.started_at) >= $2
               AND COALESCE(te.finished_at, te.started_at) < $3
               AND NOT te.is_deleted
               AND NOT u.is_deleted
+        ),
+        ebs_per_te AS (
+            SELECT
+                ft.id AS execution_id,
+                COALESCE(SUM(ebs.comment_count), 0)::bigint AS comment_count,
+                COALESCE(SUM(ebs.like_count), 0)::bigint AS like_count,
+                COALESCE(SUM(ebs.collect_count), 0)::bigint AS collect_count,
+                COALESCE(SUM(ebs.dm_count), 0)::bigint AS dm_count,
+                COALESCE(SUM(ebs.unique_reach), 0)::bigint AS unique_reach
+            FROM filtered_te ft
+            LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = ft.id
+            GROUP BY ft.id
+        ),
+        te_agg AS (
+            SELECT
+                COUNT(*)::bigint AS executions,
+                COUNT(*) FILTER (WHERE {_success_filter_sql('ft')})::bigint AS successes,
+                COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
+                COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
+                COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
+                COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
+                COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach
+            FROM filtered_te ft
+            LEFT JOIN ebs_per_te ebs ON ebs.execution_id = ft.id
         )
         SELECT executions, successes, comments, likes, saves, dms, reach
         FROM te_agg
@@ -442,38 +457,48 @@ async def _actual_fetch_ops_trend(
                 INTERVAL '{step}'
             ) AS bucket
         ),
-        ebs_per_te AS (
+        filtered_te AS (
             SELECT
-                execution_id,
-                SUM(comment_count) AS comment_count,
-                SUM(like_count) AS like_count,
-                SUM(collect_count) AS collect_count,
-                SUM(dm_count) AS dm_count,
-                SUM(unique_reach) AS unique_reach
-            FROM execution_behavior_stat
-            GROUP BY execution_id
-        ),
-        te_agg AS (
-            SELECT
-                DATE_TRUNC('{trunc}', COALESCE(te.finished_at, te.started_at) AT TIME ZONE 'Asia/Shanghai') AS bucket,
-                COUNT(*) FILTER (WHERE {_success_filter_sql('te')})::bigint AS success,
-                COUNT(*) FILTER (WHERE te.execution_result = 'FAILED')::bigint AS failed,
-                COUNT(*)::bigint AS total,
-                COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
-                COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
-                COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
-                COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
-                COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach,
-                COALESCE(SUM(EXTRACT(EPOCH FROM (te.finished_at - te.started_at))), 0)::float / 3600.0 AS runtime_h
+                te.id,
+                te.execution_result,
+                te.started_at,
+                te.finished_at,
+                DATE_TRUNC('{trunc}', COALESCE(te.finished_at, te.started_at) AT TIME ZONE 'Asia/Shanghai') AS bucket
             FROM task_execution te
-            LEFT JOIN ebs_per_te ebs ON ebs.execution_id = te.id
             JOIN users u ON u.id = te.user_id
             WHERE u.tenant_id = $1
               AND COALESCE(te.finished_at, te.started_at) >= $2
               AND COALESCE(te.finished_at, te.started_at) < $3
               AND NOT te.is_deleted
               AND NOT u.is_deleted
-            GROUP BY DATE_TRUNC('{trunc}', COALESCE(te.finished_at, te.started_at) AT TIME ZONE 'Asia/Shanghai')
+        ),
+        ebs_per_te AS (
+            SELECT
+                ft.id AS execution_id,
+                COALESCE(SUM(ebs.comment_count), 0)::bigint AS comment_count,
+                COALESCE(SUM(ebs.like_count), 0)::bigint AS like_count,
+                COALESCE(SUM(ebs.collect_count), 0)::bigint AS collect_count,
+                COALESCE(SUM(ebs.dm_count), 0)::bigint AS dm_count,
+                COALESCE(SUM(ebs.unique_reach), 0)::bigint AS unique_reach
+            FROM filtered_te ft
+            LEFT JOIN execution_behavior_stat ebs ON ebs.execution_id = ft.id
+            GROUP BY ft.id
+        ),
+        te_agg AS (
+            SELECT
+                ft.bucket,
+                COUNT(*) FILTER (WHERE {_success_filter_sql('ft')})::bigint AS success,
+                COUNT(*) FILTER (WHERE ft.execution_result = 'FAILED')::bigint AS failed,
+                COUNT(*)::bigint AS total,
+                COALESCE(SUM(ebs.comment_count), 0)::bigint AS comments,
+                COALESCE(SUM(ebs.like_count), 0)::bigint AS likes,
+                COALESCE(SUM(ebs.collect_count), 0)::bigint AS saves,
+                COALESCE(SUM(ebs.dm_count), 0)::bigint AS dms,
+                COALESCE(SUM(ebs.unique_reach), 0)::bigint AS reach,
+                COALESCE(SUM(EXTRACT(EPOCH FROM (ft.finished_at - ft.started_at))), 0)::float / 3600.0 AS runtime_h
+            FROM filtered_te ft
+            LEFT JOIN ebs_per_te ebs ON ebs.execution_id = ft.id
+            GROUP BY ft.bucket
         ),
         ur_agg AS (
             SELECT
@@ -692,17 +717,23 @@ async def _actual_aggregate_achievements(
     _prev_totals: Any = None,
 ) -> dict[str, Any]:
     cur_start, cur_end, prev_start, prev_end, compare_label, unit, _ = _window or _resolve_window(range_param, start, end)
-
-    bucket_rows = await _fetch_metric_buckets(pool, tenant_id, cur_start, cur_end, unit)
     prev_totals = await _resolve_async_value(
         _prev_totals
         if _prev_totals is not None
         else _fetch_period_totals(pool, tenant_id, prev_start, prev_end)
     )
-    cur_totals = {
-        source_key: sum(int(r[source_key]) for r in bucket_rows)
-        for source_key in set(ACHIEVEMENT_SOURCE_KEYS.values())
-    }
+    resolved_cur_totals = await _resolve_async_value(_cur_totals) if _cur_totals is not None else None
+    if resolved_cur_totals is None:
+        bucket_rows = await _fetch_metric_buckets(pool, tenant_id, cur_start, cur_end, unit)
+        cur_totals = {
+            source_key: sum(int(r[source_key]) for r in bucket_rows)
+            for source_key in set(ACHIEVEMENT_SOURCE_KEYS.values())
+        }
+    else:
+        cur_totals = {
+            source_key: int(resolved_cur_totals.get(source_key, 0))
+            for source_key in set(ACHIEVEMENT_SOURCE_KEYS.values())
+        }
 
     achievements: list[dict[str, Any]] = []
 
@@ -1388,64 +1419,95 @@ async def _actual_aggregate_snapshot(
 ) -> dict[str, Any]:
     window = _resolve_window(range_param, start, end)
     cur_start, cur_end, prev_start, prev_end, _, unit, _ = window
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            cur_totals = await _fetch_period_totals(conn, tenant_id, cur_start, cur_end)
-            prev_totals = await _fetch_period_totals(conn, tenant_id, prev_start, prev_end)
-            cur_credits = await _fetch_period_credits(conn, tenant_id, cur_start, cur_end)
-            prev_credits = await _fetch_period_credits(conn, tenant_id, prev_start, prev_end)
-            highlights = await aggregate_highlights(
-                conn,
-                tenant_id,
-                range_param,
-                start,
-                end,
-                _window=window,
-                _prev_totals=prev_totals,
-            )
-            achievements = await aggregate_achievements(
-                conn,
-                tenant_id,
-                range_param,
-                start,
-                end,
-                _window=window,
-                _cur_totals=cur_totals,
-                _prev_totals=prev_totals,
-            )
-            aggs = await aggregate_aggregations(conn, tenant_id, range_param, start, end, _window=window)
-            charts = await aggregate_charts(
-                conn,
-                tenant_id,
-                range_param,
-                start,
-                end,
-                _window=window,
-                _cur_totals=cur_totals,
-                _cur_credits=cur_credits,
-                _prev_totals=prev_totals,
-                _prev_credits=prev_credits,
-            )
-            ops_trend = await _fetch_ops_trend(conn, tenant_id, cur_start, cur_end, unit)
-            members = await get_members(conn, tenant_id)
-            wallet = await get_wallet(conn, tenant_id)
-            transactions = await _actual_get_transactions(conn, 1, 20, tenant_id)
-            stats_task_rows = await stats_tasks(conn, tenant_id)
-            audit_log = await _actual_get_audit_log(conn, tenant_id, 1, 20)
+    cur_totals_task = asyncio.create_task(_fetch_period_totals(pool, tenant_id, cur_start, cur_end))
+    prev_totals_task = asyncio.create_task(_fetch_period_totals(pool, tenant_id, prev_start, prev_end))
+    cur_credits_task = asyncio.create_task(_fetch_period_credits(pool, tenant_id, cur_start, cur_end))
+    prev_credits_task = asyncio.create_task(_fetch_period_credits(pool, tenant_id, prev_start, prev_end))
 
-            return {
-                "range": range_param,
-                "highlights": highlights,
-                "achievements": achievements,
-                "aggs": aggs,
-                "charts": charts,
-                "ops_trend": ops_trend,
-                "members": members,
-                "wallet": wallet,
-                "transactions": transactions,
-                "stats_tasks": stats_task_rows,
-                "audit_log": audit_log,
-            }
+    highlights_task = asyncio.create_task(
+        aggregate_highlights(
+            pool,
+            tenant_id,
+            range_param,
+            start,
+            end,
+            _window=window,
+            _prev_totals=prev_totals_task,
+        )
+    )
+    achievements_task = asyncio.create_task(
+        aggregate_achievements(
+            pool,
+            tenant_id,
+            range_param,
+            start,
+            end,
+            _window=window,
+            _cur_totals=cur_totals_task,
+            _prev_totals=prev_totals_task,
+        )
+    )
+    aggs_task = asyncio.create_task(
+        aggregate_aggregations(pool, tenant_id, range_param, start, end, _window=window)
+    )
+    charts_task = asyncio.create_task(
+        aggregate_charts(
+            pool,
+            tenant_id,
+            range_param,
+            start,
+            end,
+            _window=window,
+            _cur_totals=cur_totals_task,
+            _cur_credits=cur_credits_task,
+            _prev_totals=prev_totals_task,
+            _prev_credits=prev_credits_task,
+        )
+    )
+    ops_trend_task = asyncio.create_task(_fetch_ops_trend(pool, tenant_id, cur_start, cur_end, unit))
+    members_task = asyncio.create_task(get_members(pool, tenant_id))
+    wallet_task = asyncio.create_task(get_wallet(pool, tenant_id))
+    transactions_task = asyncio.create_task(get_transactions(pool, 1, 20, tenant_id))
+    stats_tasks_task = asyncio.create_task(stats_tasks(pool, tenant_id))
+    audit_log_task = asyncio.create_task(get_audit_log(pool, tenant_id, 1, 20))
+
+    (
+        highlights,
+        achievements,
+        aggs,
+        charts,
+        ops_trend,
+        members,
+        wallet,
+        transactions,
+        stats_task_rows,
+        audit_log,
+    ) = await asyncio.gather(
+        highlights_task,
+        achievements_task,
+        aggs_task,
+        charts_task,
+        ops_trend_task,
+        members_task,
+        wallet_task,
+        transactions_task,
+        stats_tasks_task,
+        audit_log_task,
+    )
+
+    return {
+        "range": range_param,
+        "highlights": highlights,
+        "achievements": achievements,
+        "aggs": aggs,
+        "charts": charts,
+        "ops_trend": ops_trend,
+        "members": members,
+        "wallet": wallet,
+        "transactions": transactions,
+        "stats_tasks": stats_task_rows,
+        "audit_log": audit_log,
+    }
 
 
 async def aggregate_snapshot(
@@ -3030,6 +3092,32 @@ async def update_member(pool: Pool, user_id: int, tenant_id: int, name: str | No
     clear_mutation_caches()
 
 
+def _deleted_member_tombstones(user_id: int, phone_number: str | None) -> tuple[str, str, str]:
+    phone_suffix = str(phone_number or "unknown")
+    return (
+        f"deleted:{user_id}:{phone_suffix}",
+        f"deleted+{user_id}@placeholder.local",
+        f"deleted:{user_id}",
+    )
+
+
+async def _release_deleted_member_unique_fields(conn, user_id: int, phone_number: str | None) -> None:
+    deleted_phone, deleted_email, deleted_username = _deleted_member_tombstones(user_id, phone_number)
+    await conn.execute(
+        """
+        UPDATE users
+        SET "phoneNumber" = $1,
+            email = $2,
+            username = CASE WHEN username IS NULL THEN NULL ELSE $3 END,
+            is_deleted = true,
+            is_active = false,
+            "updatedAt" = NOW()
+        WHERE id = $4
+        """,
+        deleted_phone, deleted_email, deleted_username, user_id,
+    )
+
+
 async def delete_member_with_conn(conn, user_id: int, tenant_id: int) -> None:
     user = await conn.fetchrow(
         'SELECT id, name FROM users WHERE id = $1 AND tenant_id = $2 AND NOT is_deleted',
@@ -3038,10 +3126,7 @@ async def delete_member_with_conn(conn, user_id: int, tenant_id: int) -> None:
     if not user:
         raise ValueError("user not found")
 
-    await conn.execute(
-        'UPDATE users SET is_deleted = true, is_active = false WHERE id = $1 AND tenant_id = $2',
-        user_id, tenant_id,
-    )
+    await _release_deleted_member_unique_fields(conn, user_id, None)
 
     await conn.execute(
         """
@@ -3062,6 +3147,21 @@ async def delete_member(pool: Pool, user_id: int, tenant_id: int) -> None:
 
 async def add_member_with_conn(conn, name: str, phone_number: str, role: str | None, initial_balance: int, tenant_id: int) -> int:
     role_value = role or "member"
+    existing_user = await conn.fetchrow(
+        """
+        SELECT id, is_deleted
+        FROM users
+        WHERE tenant_id = $1
+          AND "phoneNumber" = $2
+        FOR UPDATE
+        """,
+        tenant_id, phone_number,
+    )
+    if existing_user:
+        if not existing_user["is_deleted"]:
+            raise ValueError("phone_number already exists")
+        await _release_deleted_member_unique_fields(conn, existing_user["id"], phone_number)
+
     new_id = await conn.fetchval(
         """
         INSERT INTO users (name, email, "emailVerified", "phoneNumber", role, tenant_id,

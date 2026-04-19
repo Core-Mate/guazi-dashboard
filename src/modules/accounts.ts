@@ -348,6 +348,16 @@ function renderAccountHeader(label: string, key?: string) {
   return '<th class="th-sortable td-mono ' + cls + '" onclick="sortAccount(\'' + key + '\')">' + label + '</th>'
 }
 
+function getVisibleAccounts() {
+  var filtered = accountList
+  if (accountSearchQuery) {
+    filtered = accountList.filter(function(acc) {
+      return (acc.name || '').toLowerCase().indexOf(accountSearchQuery) >= 0
+    })
+  }
+  return sortAccounts(filtered)
+}
+
 export function exportAccountCSV() {
   var rows = accountList.map(function(acc) {
     return [acc.name, acc.successCount, acc.tokenUsed, acc.successDuration, acc.comments, acc.likes, getAccountFavorites(acc), acc.dms, getAccountUniqueReach(acc)];
@@ -359,13 +369,7 @@ export function renderAccountAcquireGroup() {
   var container = document.getElementById('accountScenarioGroup');
   if (!container) return;
   hideAccountHoverCard()
-  var filtered = accountList;
-  if (accountSearchQuery) {
-    filtered = accountList.filter(function(acc) {
-      return (acc.name || '').toLowerCase().indexOf(accountSearchQuery) >= 0;
-    });
-  }
-  filtered = sortAccounts(filtered);
+  var filtered = getVisibleAccounts()
   var totalAccounts = filtered.length;
   var tableRows = filtered.length ? filtered.map(function(acc) {
     function displayVal(v) { return v > 0 ? v.toLocaleString() : '<span class="text-na">暂无</span>'; }
