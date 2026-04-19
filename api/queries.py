@@ -55,6 +55,51 @@ except ImportError:  # pragma: no cover
         def clear(self) -> None:
             self._data.clear()
 
+
+class PerKeyLock:
+    def __init__(self):
+        self._locks = {}
+        self._registry_lock = asyncio.Lock()
+
+    async def acquire(self, key):
+        async with self._registry_lock:
+            lock = self._locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._locks[key] = lock
+        await lock.acquire()
+        return lock
+
+    def release(self, lock):
+        lock.release()
+
+    async def cleanup(self, key):
+        async with self._registry_lock:
+            lock = self._locks.get(key)
+            if lock and not lock.locked():
+                self._locks.pop(key, None)
+
+
+async def _cached_or_lock(cache, registry, key, loader, timeout=30.0):
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    lock = await registry.acquire(key)
+    try:
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+        try:
+            result = await asyncio.wait_for(loader(), timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            raise HTTPException(status_code=503, detail="Backend query timeout") from exc
+        cache[key] = result
+        return result
+    finally:
+        registry.release(lock)
+        await registry.cleanup(key)
+
+
 TENANT_SCOPED_TABLES = {
     "users", "credit_flow", "task_execution", "task_draft",
     "skill", "execution_behavior_stat",
@@ -71,11 +116,19 @@ CN_TZ = timezone(timedelta(hours=8))
 logger = logging.getLogger(__name__)
 QUERY_TIMEOUT_SECONDS = 30.0
 _snapshot_cache = TTLCache(maxsize=200, ttl=90)
-_cache_lock = asyncio.Lock()
+_snapshot_cache_registry = PerKeyLock()
+_highlights_cache = TTLCache(maxsize=200, ttl=90)
+_highlights_cache_registry = PerKeyLock()
+_charts_cache = TTLCache(maxsize=200, ttl=90)
+_charts_cache_registry = PerKeyLock()
+_aggs_cache = TTLCache(maxsize=200, ttl=90)
+_aggs_cache_registry = PerKeyLock()
+_ops_trend_cache = TTLCache(maxsize=200, ttl=90)
+_ops_trend_cache_registry = PerKeyLock()
 _tx_cache = TTLCache(maxsize=500, ttl=60)
-_tx_cache_lock = asyncio.Lock()
+_tx_cache_registry = PerKeyLock()
 _oplog_cache = TTLCache(maxsize=500, ttl=60)
-_oplog_cache_lock = asyncio.Lock()
+_oplog_cache_registry = PerKeyLock()
 _CACHE_MISS = object()
 
 
@@ -493,11 +546,13 @@ async def _fetch_ops_trend(
     cur_end: datetime,
     unit: str,
 ) -> dict[str, list[Any]]:
-    context = (tenant_id, cur_start.isoformat(), cur_end.isoformat(), unit)
-    return await _run_timed_operation(
-        "_fetch_ops_trend",
-        _actual_fetch_ops_trend(pool, tenant_id, cur_start, cur_end, unit),
-        context=context,
+    cache_key = (tenant_id, cur_start.isoformat(), cur_end.isoformat(), unit)
+    return await _cached_or_lock(
+        _ops_trend_cache,
+        _ops_trend_cache_registry,
+        cache_key,
+        lambda: _actual_fetch_ops_trend(pool, tenant_id, cur_start, cur_end, unit),
+        timeout=QUERY_TIMEOUT_SECONDS,
     )
 
 
@@ -593,10 +648,12 @@ async def aggregate_highlights(
     _window: Optional[tuple[datetime, datetime, datetime, datetime, str, str, int]] = None,
     _prev_totals: Any = None,
 ) -> dict[str, Any]:
-    context = (tenant_id, range_param, start, end)
-    return await _run_timed_operation(
-        "aggregate_highlights",
-        _actual_aggregate_highlights(
+    cache_key = (tenant_id, range_param, start, end)
+    return await _cached_or_lock(
+        _highlights_cache,
+        _highlights_cache_registry,
+        cache_key,
+        lambda: _actual_aggregate_highlights(
             pool,
             tenant_id,
             range_param,
@@ -605,7 +662,7 @@ async def aggregate_highlights(
             _window=_window,
             _prev_totals=_prev_totals,
         ),
-        context=context,
+        timeout=QUERY_TIMEOUT_SECONDS,
     )
 
 
@@ -1080,10 +1137,12 @@ async def aggregate_aggregations(
     end: Optional[str] = None,
     _window: Optional[tuple[datetime, datetime, datetime, datetime, str, str, int]] = None,
 ) -> dict[str, Any]:
-    context = (tenant_id, range_param, start, end)
-    return await _run_timed_operation(
-        "aggregate_aggregations",
-        _actual_aggregate_aggregations(
+    cache_key = (tenant_id, range_param, start, end)
+    return await _cached_or_lock(
+        _aggs_cache,
+        _aggs_cache_registry,
+        cache_key,
+        lambda: _actual_aggregate_aggregations(
             pool,
             tenant_id,
             range_param,
@@ -1091,7 +1150,7 @@ async def aggregate_aggregations(
             end,
             _window=_window,
         ),
-        context=context,
+        timeout=QUERY_TIMEOUT_SECONDS,
     )
 
 
@@ -1295,10 +1354,12 @@ async def aggregate_charts(
     _prev_totals: Any = None,
     _prev_credits: Any = None,
 ) -> dict[str, Any]:
-    context = (tenant_id, range_param, start, end)
-    return await _run_timed_operation(
-        "aggregate_charts",
-        _actual_aggregate_charts(
+    cache_key = (tenant_id, range_param, start, end)
+    return await _cached_or_lock(
+        _charts_cache,
+        _charts_cache_registry,
+        cache_key,
+        lambda: _actual_aggregate_charts(
             pool,
             tenant_id,
             range_param,
@@ -1310,7 +1371,7 @@ async def aggregate_charts(
             _prev_totals=_prev_totals,
             _prev_credits=_prev_credits,
         ),
-        context=context,
+        timeout=QUERY_TIMEOUT_SECONDS,
     )
 
 
@@ -1395,22 +1456,13 @@ async def aggregate_snapshot(
     end: Optional[str] = None,
 ) -> dict[str, Any]:
     cache_key = (tenant_id, range_param, start, end)
-    cached_snapshot = _snapshot_cache.get(cache_key, _CACHE_MISS)
-    if cached_snapshot is not _CACHE_MISS:
-        return cached_snapshot
-
-    async with _cache_lock:
-        cached_snapshot = _snapshot_cache.get(cache_key, _CACHE_MISS)
-        if cached_snapshot is not _CACHE_MISS:
-            return cached_snapshot
-
-        snapshot = await _run_timed_operation(
-            "aggregate_snapshot",
-            _actual_aggregate_snapshot(pool, tenant_id, range_param, start, end),
-            context=cache_key,
-        )
-        _snapshot_cache[cache_key] = snapshot
-        return snapshot
+    return await _cached_or_lock(
+        _snapshot_cache,
+        _snapshot_cache_registry,
+        cache_key,
+        lambda: _actual_aggregate_snapshot(pool, tenant_id, range_param, start, end),
+        timeout=QUERY_TIMEOUT_SECONDS,
+    )
 
 
 WHITELIST = {
@@ -2292,32 +2344,23 @@ async def get_transactions(
         filters.get("end_date"),
         filters.get("keyword"),
     )
-    cached_transactions = _tx_cache.get(cache_key, _CACHE_MISS)
-    if cached_transactions is not _CACHE_MISS:
-        return cached_transactions
-
-    async with _tx_cache_lock:
-        cached_transactions = _tx_cache.get(cache_key, _CACHE_MISS)
-        if cached_transactions is not _CACHE_MISS:
-            return cached_transactions
-
-        transactions = await _run_timed_operation(
-            "get_transactions",
-            _actual_get_transactions(
-                pool,
-                page,
-                page_size,
-                tenant_id,
-                filters.get("member_id"),
-                filters.get("tx_type"),
-                filters.get("start_date"),
-                filters.get("end_date"),
-                filters.get("keyword"),
-            ),
-            context=cache_key,
-        )
-        _tx_cache[cache_key] = transactions
-        return transactions
+    return await _cached_or_lock(
+        _tx_cache,
+        _tx_cache_registry,
+        cache_key,
+        lambda: _actual_get_transactions(
+            pool,
+            page,
+            page_size,
+            tenant_id,
+            filters.get("member_id"),
+            filters.get("tx_type"),
+            filters.get("start_date"),
+            filters.get("end_date"),
+            filters.get("keyword"),
+        ),
+        timeout=QUERY_TIMEOUT_SECONDS,
+    )
 
 
 async def get_skills(pool: Pool, tenant_id: int) -> list[dict[str, Any]]:
@@ -2801,36 +2844,31 @@ async def get_audit_log(
         end_date,
         keyword,
     )
-    cached_audit_log = _oplog_cache.get(cache_key, _CACHE_MISS)
-    if cached_audit_log is not _CACHE_MISS:
-        return cached_audit_log
-
-    async with _oplog_cache_lock:
-        cached_audit_log = _oplog_cache.get(cache_key, _CACHE_MISS)
-        if cached_audit_log is not _CACHE_MISS:
-            return cached_audit_log
-
-        audit_log = await _run_timed_operation(
-            "get_audit_log",
-            _actual_get_audit_log(
-                pool,
-                tenant_id,
-                page,
-                page_size,
-                member_id,
-                action,
-                start_date,
-                end_date,
-                keyword,
-            ),
-            context=cache_key,
-        )
-        _oplog_cache[cache_key] = audit_log
-        return audit_log
+    return await _cached_or_lock(
+        _oplog_cache,
+        _oplog_cache_registry,
+        cache_key,
+        lambda: _actual_get_audit_log(
+            pool,
+            tenant_id,
+            page,
+            page_size,
+            member_id,
+            action,
+            start_date,
+            end_date,
+            keyword,
+        ),
+        timeout=QUERY_TIMEOUT_SECONDS,
+    )
 
 
 def clear_mutation_caches() -> None:
     _snapshot_cache.clear()
+    _highlights_cache.clear()
+    _charts_cache.clear()
+    _aggs_cache.clear()
+    _ops_trend_cache.clear()
     _tx_cache.clear()
     _oplog_cache.clear()
 
@@ -3094,3 +3132,29 @@ async def record_idempotency(conn, tenant_id: int, key: str, endpoint: str,
         "ON CONFLICT (tenant_id, idempotency_key) DO NOTHING",
         key, tenant_id, endpoint, body_hash, json.dumps(response, default=str)
     )
+
+
+async def _smoke_test_per_key_lock() -> float:
+    cache: dict[str, str] = {}
+    registry = PerKeyLock()
+
+    async def _load(key: str) -> str:
+        return await _cached_or_lock(
+            cache,
+            registry,
+            key,
+            lambda: asyncio.sleep(0.5, result=key),
+            timeout=QUERY_TIMEOUT_SECONDS,
+        )
+
+    started_at = time.perf_counter()
+    results = await asyncio.gather(_load("k1"), _load("k2"), _load("k3"))
+    elapsed = time.perf_counter() - started_at
+    assert results == ["k1", "k2", "k3"]
+    assert elapsed < 1.0, f"PerKeyLock smoke test serialized: {elapsed:.3f}s"
+    return elapsed
+
+
+if __name__ == "__main__":
+    elapsed_seconds = asyncio.run(_smoke_test_per_key_lock())
+    print(f"PerKeyLock smoke test passed in {elapsed_seconds:.3f}s")

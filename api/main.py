@@ -337,10 +337,15 @@ async def startup_self_check() -> None:
 
     tenant_env = os.getenv("TENANT_ID", "").strip()
     keys_env = os.getenv("DASHBOARD_API_KEYS", "").strip()
+    env_flag = os.getenv("DASHBOARD_ENV", "").strip().lower()
+    is_prod = env_flag in ("prod", "production")
     if not keys_env and tenant_env in ("", "1"):
-        raise RuntimeError(
-            "Must set DASHBOARD_API_KEYS (key:tenant,...) or TENANT_ID to a real tenant id (not default 1)"
-        )
+        msg = "DASHBOARD_API_KEYS empty and TENANT_ID is default 1 — using dev defaults"
+        if is_prod:
+            raise RuntimeError(
+                "Must set DASHBOARD_API_KEYS (key:tenant,...) or TENANT_ID to a real tenant id in production"
+            )
+        logger.warning(msg)
 
     logger.info(
         "Dashboard startup self-check passed",
