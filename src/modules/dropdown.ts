@@ -1,9 +1,17 @@
+import { positionDropdown } from './dropdown-position'
+
 var DROPDOWN_EXIT_DURATION = 120
+var dropdownTriggerCounter = 0
 
 type CustomDropdownOptions = {
   searchable?: boolean;
   placeholder?: string;
   subtitleKey?: string;
+}
+
+function nextDropdownTriggerId() {
+  dropdownTriggerCounter += 1
+  return 'custom-select-trigger-' + dropdownTriggerCounter
 }
 
 function clearDropdownTimer(wrapper: HTMLElement) {
@@ -13,84 +21,85 @@ function clearDropdownTimer(wrapper: HTMLElement) {
   delete wrapper.dataset.closeTimer
 }
 
+function getPanelForWrapper(wrapper: HTMLElement) {
+  var triggerId = wrapper.dataset.triggerId
+  if (!triggerId) return null
+  return document.querySelector('.custom-select-panel[data-trigger-id="' + triggerId + '"]') as HTMLElement | null
+}
+
+function removePanelForWrapper(wrapper: HTMLElement) {
+  var panel = getPanelForWrapper(wrapper)
+  if (panel) panel.remove()
+}
+
 export function positionDropdownPanel(panel: HTMLElement, trigger: HTMLElement) {
-  var rect = trigger.getBoundingClientRect()
-  var vw = window.innerWidth
-  var vh = window.innerHeight
+  var triggerRect = trigger.getBoundingClientRect()
+  var isMobile = window.innerWidth < 480
 
-  panel.classList.remove('flip-up')
-  panel.style.position = 'fixed'
-  panel.style.top = rect.bottom + 4 + 'px'
-  panel.style.left = rect.left + 'px'
-  panel.style.bottom = ''
-  panel.style.right = ''
-  panel.style.width = ''
-  panel.style.minWidth = Math.min(rect.width, vw - 16) + 'px'
   panel.style.maxWidth = 'calc(100vw - 16px)'
+  panel.style.minWidth = Math.min(triggerRect.width, Math.max(window.innerWidth - 16, 0)) + 'px'
 
+  if (isMobile) {
+    panel.classList.add('bottom-sheet')
+    panel.style.width = Math.max(window.innerWidth - 16, 0) + 'px'
+  } else {
+    panel.classList.remove('bottom-sheet')
+    panel.style.width = ''
+  }
+
+  var wasVisible = panel.classList.contains('open')
   var prevVisibility = panel.style.visibility
-  var prevPointerEvents = panel.style.pointerEvents
-  var prevTransform = panel.style.transform
-  var prevTransition = panel.style.transition
-
-  panel.style.visibility = 'hidden'
-  panel.style.pointerEvents = 'none'
-  panel.style.maxHeight = 'none'
-  panel.style.transform = 'none'
-  panel.style.transition = 'none'
-
-  void panel.offsetHeight
-
-  var panelRect = panel.getBoundingClientRect()
-  var panelWidth = panelRect.width
-  var panelHeight = panelRect.height
-  var nextLeft = rect.left
-
-  if (nextLeft + panelWidth > vw - 8) {
-    nextLeft = rect.right - panelWidth
+  if (!wasVisible) {
+    panel.style.visibility = 'hidden'
+    panel.classList.add('open')
   }
-  if (nextLeft + panelWidth > vw - 8) {
-    nextLeft = Math.max(8, vw - panelWidth - 8)
-  }
-  if (nextLeft < 8) {
-    nextLeft = 8
+  var panelSize = { width: panel.offsetWidth, height: panel.offsetHeight }
+  if (!wasVisible) {
+    panel.classList.remove('open')
+    panel.style.visibility = prevVisibility
   }
 
-  var nextTop = rect.bottom + 4
-  var availableHeight = vh - rect.bottom - 12
-  if (rect.bottom + panelHeight > vh - 8) {
-    panel.classList.add('flip-up')
-    nextTop = Math.max(8, rect.top - panelHeight - 4)
-    availableHeight = rect.top - 12
+  var pos = positionDropdown(triggerRect, panelSize)
+  panel.style.left = pos.left + 'px'
+  panel.style.top = pos.top + 'px'
+  if (pos.width === 'auto' || typeof pos.width === 'undefined') {
+    panel.style.width = ''
+  } else if (typeof pos.width === 'number') {
+    panel.style.width = pos.width + 'px'
   }
-
-  panel.style.left = nextLeft + 'px'
-  panel.style.top = nextTop + 'px'
-  panel.style.maxHeight = Math.max(120, availableHeight) + 'px'
-  panel.style.overflowY = panel.classList.contains('searchable') ? 'hidden' : 'auto'
-
-  panel.style.visibility = prevVisibility
-  panel.style.pointerEvents = prevPointerEvents
-  panel.style.transform = prevTransform
-  panel.style.transition = prevTransition
+  if (pos.bottomSheet) {
+    panel.classList.add('bottom-sheet')
+  } else {
+    panel.classList.remove('bottom-sheet')
+  }
 }
 
 function openDropdown(wrapper: HTMLElement) {
+  var panel = getPanelForWrapper(wrapper)
   clearDropdownTimer(wrapper)
-  wrapper.classList.remove('is-leaving', 'is-open')
+  wrapper.classList.remove('is-leaving')
+  if (panel) panel.classList.remove('leaving')
   void wrapper.offsetHeight
+  if (panel) void panel.offsetHeight
   requestAnimationFrame(function() {
     wrapper.classList.add('is-open')
+    if (panel) panel.classList.add('open')
   })
 }
 
 function closeDropdown(wrapper: HTMLElement) {
+  var panel = getPanelForWrapper(wrapper)
   clearDropdownTimer(wrapper)
   if (!wrapper.classList.contains('is-open') && !wrapper.classList.contains('is-leaving')) return
   wrapper.classList.remove('is-open')
   wrapper.classList.add('is-leaving')
+  if (panel) {
+    panel.classList.remove('open')
+    panel.classList.add('leaving')
+  }
   wrapper.dataset.closeTimer = String(window.setTimeout(function() {
     wrapper.classList.remove('is-leaving')
+    if (panel) panel.classList.remove('leaving')
     delete wrapper.dataset.closeTimer
   }, DROPDOWN_EXIT_DURATION))
 }
@@ -119,15 +128,21 @@ function buildDropdownPanel(select: HTMLSelectElement, wrapper: HTMLElement, opt
   wrapper.className = 'custom-select'
   wrapper.classList.remove('is-open', 'is-leaving')
   select.style.display = 'none'
+  removePanelForWrapper(wrapper)
+
+  var triggerId = nextDropdownTriggerId()
+  wrapper.dataset.triggerId = triggerId
 
   var trigger = document.createElement('button');
   trigger.className = 'custom-select-trigger';
   trigger.type = 'button';
+  trigger.dataset.triggerId = triggerId
   var selectedOpt = select.options[select.selectedIndex];
   trigger.textContent = selectedOpt ? selectedOpt.text : '';
 
   var panel = document.createElement('div');
   panel.className = 'custom-select-panel' + (opts && opts.searchable ? ' searchable' : '');
+  panel.dataset.triggerId = triggerId
   panel.addEventListener('click', function(e) {
     e.stopPropagation();
   });
@@ -145,7 +160,6 @@ function buildDropdownPanel(select: HTMLSelectElement, wrapper: HTMLElement, opt
       return;
     }
     closeOtherDropdowns(wrapper);
-    positionDropdownPanel(panel, trigger);
     if (opts && opts.searchable) {
       var searchInput = panel.querySelector('.dropdown-search') as HTMLInputElement | null;
       if (searchInput) {
@@ -154,8 +168,8 @@ function buildDropdownPanel(select: HTMLSelectElement, wrapper: HTMLElement, opt
           node.classList.remove('hidden');
         });
       }
-      panel.style.overflowY = 'hidden';
     }
+    positionDropdownPanel(panel, trigger);
     openDropdown(wrapper);
     if (opts && opts.searchable) {
       var input = panel.querySelector('.dropdown-search') as HTMLInputElement | null;
@@ -168,7 +182,17 @@ function buildDropdownPanel(select: HTMLSelectElement, wrapper: HTMLElement, opt
   });
 
   wrapper.insertBefore(trigger, select);
-  wrapper.insertBefore(panel, select);
+  document.body.appendChild(panel);
+}
+
+function repositionOpenDropdowns() {
+  document.querySelectorAll('.custom-select.is-open').forEach(function(node) {
+    var wrapper = node as HTMLElement
+    var trigger = wrapper.querySelector('.custom-select-trigger') as HTMLElement | null
+    var panel = getPanelForWrapper(wrapper)
+    if (!trigger || !panel) return
+    positionDropdownPanel(panel, trigger)
+  })
 }
 
 export function initCustomDropdowns() {
@@ -181,7 +205,9 @@ export function initCustomDropdowns() {
 
   if (!(window as any).__customSelectClickBound) {
     (window as any).__customSelectClickBound = true;
-    document.addEventListener('click', function() {
+    document.addEventListener('click', function(e) {
+      var target = e.target as HTMLElement | null
+      if (target && (target.closest('.custom-select-trigger') || target.closest('.custom-select-panel'))) return
       document.querySelectorAll('.custom-select.is-open, .custom-select.is-leaving').forEach(function(w) {
         closeDropdown(w as HTMLElement);
       });
@@ -190,15 +216,12 @@ export function initCustomDropdowns() {
 
   if (!(window as any).__customSelectResizeBound) {
     (window as any).__customSelectResizeBound = true;
-    window.addEventListener('resize', function() {
-      document.querySelectorAll('.custom-select.is-open').forEach(function(node) {
-        var wrapper = node as HTMLElement
-        var trigger = wrapper.querySelector('.custom-select-trigger') as HTMLElement | null
-        var panel = wrapper.querySelector('.custom-select-panel') as HTMLElement | null
-        if (!trigger || !panel) return
-        positionDropdownPanel(panel, trigger)
-      })
-    })
+    window.addEventListener('resize', repositionOpenDropdowns)
+  }
+
+  if (!(window as any).__customSelectScrollBound) {
+    (window as any).__customSelectScrollBound = true
+    window.addEventListener('scroll', repositionOpenDropdowns, true)
   }
 }
 
@@ -307,7 +330,9 @@ export function rebuildCustomDropdown(selectId: string, opts?: {
   if (!select) return
   select.dataset.customized = 'true'
   var wrapper = ensureDropdownWrapper(select)
-  wrapper.querySelectorAll('.custom-select-panel, .custom-select-trigger').forEach(function(node) {
+  clearDropdownTimer(wrapper)
+  removePanelForWrapper(wrapper)
+  wrapper.querySelectorAll('.custom-select-trigger').forEach(function(node) {
     node.remove()
   })
   buildDropdownPanel(select, wrapper, opts)

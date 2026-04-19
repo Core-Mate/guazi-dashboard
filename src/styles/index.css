@@ -849,28 +849,21 @@
     background-repeat: no-repeat; background-position: right 10px center; background-size: 12px;
   }
   .custom-select-trigger:hover { border-color: #d4d4d8; }
-  .custom-select.open .custom-select-trigger { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
-  .custom-select.open .custom-select-trigger {
+  .custom-select.is-open .custom-select-trigger,
+  .custom-select.is-leaving .custom-select-trigger {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%232563eb' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
   }
   .custom-select-panel {
-    position: absolute; top: calc(100% + 4px); left: 0;
-    min-width: 100%; background: #fff; border: 1px solid #e4e4e7;
+    position: fixed;
+    background: #fff; border: 1px solid #e4e4e7;
     border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.10);
-    z-index: 50; padding: 4px;
+    z-index: 10000; padding: 4px;
     opacity: 0;
     transform: translateY(-4px) scaleY(0.96);
     max-height: 0;
     overflow: hidden;
     pointer-events: none;
     transition: opacity 0.2s ease, transform 0.2s ease, max-height 0.25s ease;
-  }
-  .custom-select.open .custom-select-panel {
-    opacity: 1;
-    transform: translateY(0) scaleY(1);
-    max-height: 240px;
-    overflow-y: auto;
-    pointer-events: auto;
   }
   .custom-select-option {
     padding: 7px 12px; font-size: 13px; border-radius: 6px;
@@ -879,13 +872,16 @@
   }
   .custom-select-option:hover { background: #f4f4f5; }
   .custom-select-option.selected { background: #eff6ff; color: #2563eb; font-weight: 500; }
-  .custom-select .custom-select-panel.flip-up { transform-origin: bottom; }
   .custom-select-panel.searchable {
     width: 280px;
     max-height: 340px;
     padding: 0;
     display: flex;
     flex-direction: column;
+  }
+  .custom-select-panel.bottom-sheet {
+    border-radius: 16px 16px 0 0;
+    max-height: 60vh;
   }
   .custom-select-panel,
   .custom-dropdown-panel,
