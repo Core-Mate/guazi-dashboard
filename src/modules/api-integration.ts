@@ -162,8 +162,9 @@ function cloneSnapshot(snapshot: DashboardSnapshot): DashboardSnapshot {
   return JSON.parse(JSON.stringify(snapshot));
 }
 
-function snapshotCacheKey(range: string, custom?: { start?: string; end?: string }) {
-  return range + '|' + (custom && custom.start || '') + '|' + (custom && custom.end || '');
+function snapshotCacheKey(range: string, custom?: { start?: string; end?: string }, tenantId?: string) {
+  var resolvedTenantId = resolveTenantId(tenantId)
+  return resolvedTenantId + '|' + range + '|' + (custom && custom.start || '') + '|' + (custom && custom.end || '');
 }
 
 export function clearDashboardSnapshotCache(range?: string, custom?: { start?: string; end?: string }) {
@@ -280,7 +281,8 @@ export async function fetchDashboardData(
   range: string,
   custom?: { start?: string; end?: string }
 ): Promise<DashboardSnapshot> {
-  var key = snapshotCacheKey(range, custom);
+  var resolvedTenantId = resolveTenantId();
+  var key = snapshotCacheKey(range, custom, resolvedTenantId);
   var now = Date.now();
   var cached = snapshotCache[key];
   if (cached && cached.data && cached.expiresAt > now) {
@@ -292,7 +294,7 @@ export async function fetchDashboardData(
 
   var pending = (async function() {
     try {
-      var query = withTenantQuery(new URLSearchParams({ range: range }))
+      var query = withTenantQuery(new URLSearchParams({ range: range }), resolvedTenantId)
       if (custom && custom.start) {
         query.set('start', custom.start)
         query.set('end', custom.end || '')

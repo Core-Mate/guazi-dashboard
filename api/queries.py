@@ -175,6 +175,8 @@ def _resolve_window(
         end_date = cur_end.date()
         if end_is_date_only:
             cur_end = cur_end + timedelta(days=1)
+        if cur_end <= cur_start:
+            raise ValueError("custom range end must be after start")
         length = cur_end - cur_start
         prev_end = cur_start
         prev_start = cur_start - length
@@ -2675,6 +2677,9 @@ async def get_audit_log(
 async def distribute_credits(pool: Pool, operator_id: int, target_user_id: int, amount: int, remark: str, api_tenant_id: int) -> None:
     async with pool.acquire() as conn:
         async with conn.transaction():
+            if operator_id == target_user_id:
+                raise ValueError("operator and target must be different users")
+
             op_user = await conn.fetchrow(
                 'SELECT id, name, tenant_id, "phoneNumber" FROM users WHERE id = $1 AND tenant_id = $2 AND NOT is_deleted',
                 operator_id, api_tenant_id,
@@ -2694,17 +2699,27 @@ async def distribute_credits(pool: Pool, operator_id: int, target_user_id: int, 
 
             tenant_id = op_user["tenant_id"]
 
-            balance_row = await conn.fetchrow(
-                'SELECT remaining, version FROM user_balance WHERE user_id = $1',
-                operator_id,
-            )
-            if not balance_row:
+            locked_balance_rows: dict[int, Any] = {}
+            for locked_user_id in sorted({operator_id, target_user_id}):
+                balance_row = await conn.fetchrow(
+                    'SELECT user_id, remaining, version FROM user_balance WHERE user_id = $1 FOR UPDATE',
+                    locked_user_id,
+                )
+                if balance_row:
+                    locked_balance_rows[locked_user_id] = balance_row
+
+            operator_balance_row = locked_balance_rows.get(operator_id)
+            if not operator_balance_row:
                 raise ValueError("operator has no balance record")
 
-            if balance_row["remaining"] < amount:
+            target_balance_row = locked_balance_rows.get(target_user_id)
+            if not target_balance_row:
+                raise ValueError("target user has no balance record")
+
+            if operator_balance_row["remaining"] < amount:
                 raise ValueError("insufficient balance")
 
-            version = balance_row["version"]
+            version = operator_balance_row["version"]
             updated = await conn.fetchval(
                 'UPDATE user_balance SET remaining = remaining - $1, version = version + 1 WHERE user_id = $2 AND version = $3 RETURNING id',
                 amount, operator_id, version,
@@ -2713,11 +2728,11 @@ async def distribute_credits(pool: Pool, operator_id: int, target_user_id: int, 
                 raise ValueError("concurrent modification detected, please retry")
 
             tgt_updated = await conn.fetchval(
-                'UPDATE user_balance SET remaining = remaining + $1, version = version + 1 WHERE user_id = $2 RETURNING id',
-                amount, target_user_id,
+                'UPDATE user_balance SET remaining = remaining + $1, version = version + 1 WHERE user_id = $2 AND version = $3 RETURNING id',
+                amount, target_user_id, target_balance_row["version"],
             )
             if not tgt_updated:
-                raise ValueError("target user has no balance record")
+                raise ValueError("concurrent modification detected, please retry")
 
             op_balance_after = await conn.fetchval(
                 'SELECT remaining FROM user_balance WHERE user_id = $1',

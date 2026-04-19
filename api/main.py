@@ -224,13 +224,59 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_ALLOWED_MEMBER_ROLES = {"admin", "member", "user"}
+_MAX_MEMBER_TEXT_LENGTH = 128
+_MAX_REMARK_LENGTH = 500
+
 
 def postgres_error_response(exc: asyncpg.PostgresError) -> JSONResponse:
-    return JSONResponse(status_code=503, content={"error": str(exc)})
+    logger.exception(
+        "Database request failed",
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+    return JSONResponse(status_code=503, content={"error": "database unavailable"})
 
 
 def value_error_response(exc: ValueError) -> JSONResponse:
     return JSONResponse(status_code=400, content={"error": str(exc)})
+
+
+def _normalize_member_text(
+    value: Optional[str],
+    *,
+    field_name: str,
+    required: bool = False,
+) -> Optional[str]:
+    if value is None:
+        if required:
+            raise ValueError(f"{field_name} is required")
+        return None
+
+    cleaned = value.strip()
+    if not cleaned:
+        raise ValueError(f"{field_name} must not be empty")
+    if len(cleaned) > _MAX_MEMBER_TEXT_LENGTH:
+        raise ValueError(f"{field_name} is too long")
+    return cleaned
+
+
+def _normalize_member_role(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+
+    cleaned = value.strip().lower()
+    if not cleaned:
+        raise ValueError("role must not be empty")
+    if cleaned not in _ALLOWED_MEMBER_ROLES:
+        raise ValueError("role must be one of: admin, member, user")
+    return cleaned
+
+
+def _normalize_remark(value: Optional[str]) -> str:
+    cleaned = (value or "").strip()
+    if len(cleaned) > _MAX_REMARK_LENGTH:
+        raise ValueError("remark is too long")
+    return cleaned
 
 
 def get_queries_module():
@@ -530,9 +576,12 @@ async def api_distribute_credits(
 ):
     if body.amount <= 0:
         return value_error_response(ValueError("amount must be positive"))
+    if body.operator_id == body.target_user_id:
+        return value_error_response(ValueError("operator and target must be different users"))
     try:
+        remark = _normalize_remark(body.remark)
         await get_queries_module().distribute_credits(
-            pool, body.operator_id, body.target_user_id, body.amount, body.remark, tenant_id
+            pool, body.operator_id, body.target_user_id, body.amount, remark, tenant_id
         )
         _clear_dashboard_component_caches()
         return {"success": True}
@@ -556,8 +605,13 @@ async def api_update_member(
     pool: Pool = Depends(db.get_pool),
 ):
     try:
+        name = _normalize_member_text(body.name, field_name="name") if body.name is not None else None
+        phone_number = _normalize_member_text(body.phone_number, field_name="phone_number") if body.phone_number is not None else None
+        role = _normalize_member_role(body.role) if body.role is not None else None
+        if name is None and phone_number is None and role is None:
+            raise ValueError("at least one update field must be provided")
         await get_queries_module().update_member(
-            pool, user_id, tenant_id, body.name, body.phone_number, body.role
+            pool, user_id, tenant_id, name, phone_number, role
         )
         _clear_dashboard_component_caches()
         return {"success": True}
@@ -597,8 +651,11 @@ async def api_add_member(
     pool: Pool = Depends(db.get_pool),
 ):
     try:
+        name = _normalize_member_text(body.name, field_name="name", required=True)
+        phone_number = _normalize_member_text(body.phone_number, field_name="phone_number", required=True)
+        role = _normalize_member_role(body.role) if body.role is not None else None
         new_id = await get_queries_module().add_member(
-            pool, body.name, body.phone_number, body.role, body.initial_balance, tenant_id
+            pool, name, phone_number, role, body.initial_balance, tenant_id
         )
         _clear_dashboard_component_caches()
         return {"id": new_id, "success": True}
