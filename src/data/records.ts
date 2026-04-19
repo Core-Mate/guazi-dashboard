@@ -4,6 +4,4 @@ export {
   replaceTransactionData,
   replaceOplogData,
   registerRecordOptimisticHandlers,
-  addTransactionRecord,
-  addOplogRecord,
 } from './generator';

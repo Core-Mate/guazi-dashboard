@@ -1,8 +1,7 @@
 import { membersData } from '../data/members'
 import { openModal, closeModal, showToast } from './modal-toast'
-import { addTransactionRecord, addOplogRecord } from '../data/records'
-import { apiAddMember, apiUpdateMember, apiDeleteMember, apiDistributeCredits, fetchWallet } from '../data/api'
-import { fetchMembers as fetchMembersApi, populateMemberFilter } from './api-integration'
+import { apiAddMember, apiUpdateMember, apiDeleteMember, apiDistributeCredits } from '../data/api'
+import { refreshDashboard } from '../main'
 
 function startLoading(label?: string) {
   var btn = document.querySelector('#modalFooter .modal-btn:not(.modal-btn-cancel)') as HTMLButtonElement;
@@ -82,41 +81,6 @@ export function sortMembers(key: 'name' | 'phone' | 'role' | 'balance' | 'joined
   renderMembers();
 }
 
-async function refreshFromApi() {
-  var data = await fetchMembersApi();
-  membersData.length = 0;
-  data.forEach(function(m) {
-    membersData.push({
-      id: m.id,
-      name: m.username || '未知',
-      phone: m.phone || '',
-      role: m.role === 'admin' ? 'admin' : 'member',
-      balance: Math.round(m.balance),
-      joinDate: m.join_date ? m.join_date.slice(0, 10) : '',
-    });
-  });
-  renderMembers();
-  populateMemberFilter();
-  var countEl = document.getElementById('statMemberCount');
-  if (countEl) countEl.textContent = membersData.length + '人';
-  var admin = membersData.find(function(m) { return m.role === 'admin'; });
-  var nameEl = document.getElementById('sidebarUserName');
-  var avatarEl = document.getElementById('sidebarAvatar');
-  var roleEl = document.getElementById('sidebarUserRole');
-  if (nameEl) nameEl.textContent = admin ? admin.name : '未加载成员';
-  if (avatarEl) avatarEl.textContent = admin ? admin.name.charAt(0) : '—';
-  if (roleEl) roleEl.textContent = admin ? '管理员' : '';
-}
-
-async function refreshWalletStats() {
-  var data = await fetchWallet();
-  if (!data) return;
-  var setIf = function(id, val) { var el = document.getElementById(id); if (el) el.textContent = val; };
-  setIf('statWallet', Math.round(data.total_balance).toLocaleString());
-  setIf('statTopup', Math.round(data.total_recharged).toLocaleString());
-  setIf('statConsumed', Math.round(data.total_consumed).toLocaleString());
-}
-
 function getPrimaryAdminId() {
   return membersData.find(function(m) { return m.role === 'admin'; })?.id ?? null;
 }
@@ -183,15 +147,11 @@ export async function addMember() {
   if (!name || !phone) { showToast('请填写姓名和手机号', 'error'); return; }
 
   var btn = startLoading();
-  var operator = '管理员';
-  var operatorMember = membersData.find(function(x) { return x.role === 'admin'; });
-  if (operatorMember) operator = operatorMember.name;
   var res = await apiAddMember(name, phone, balance);
   if (!res.ok) { stopLoading(btn, '添加'); showToast(res.error || '添加失败', 'error'); return; }
   closeModal();
-  await Promise.all([refreshFromApi(), refreshWalletStats()]);
+  await refreshDashboard();
   showToast('成功添加成员 ' + name, 'success');
-  addOplogRecord(operator, '新增成员', '添加成员 ' + name, '已加入团队');
 }
 
 export function openManageMemberModal(id) {
@@ -220,9 +180,6 @@ export async function saveManageMember(id) {
   var adjust = parseInt((document.getElementById('mgAdjust') as HTMLInputElement).value) || 0;
   var note = ((document.getElementById('mgNote') as HTMLInputElement) || {}).value || '';
   note = note.trim();
-  var operator = '管理员';
-  var operatorMember = membersData.find(function(x) { return x.role === 'admin'; });
-  if (operatorMember) operator = operatorMember.name;
 
   var btn = startLoading();
   var updateRes = await apiUpdateMember(id, { name: name, phone_number: phone, role: role });
@@ -241,12 +198,7 @@ export async function saveManageMember(id) {
   }
 
   closeModal();
-  await Promise.all([refreshFromApi(), refreshWalletStats()]);
-  if (adjust !== 0) {
-    addTransactionRecord(operator, adjust > 0 ? '分发' : '扣减', adjust > 0 ? '分发给 ' + name + ' ' + adjust.toLocaleString() + ' 算力豆' : '回收 ' + Math.abs(adjust).toLocaleString() + ' 算力豆自 ' + name, -adjust);
-    addOplogRecord(operator, '分发算力豆', adjust > 0 ? '分发 ' + adjust.toLocaleString() + ' 算力豆给 ' + name : '回收 ' + Math.abs(adjust).toLocaleString() + ' 算力豆自 ' + name);
-  }
-  addOplogRecord(operator, '编辑成员', '编辑成员 ' + name, '已更新');
+  await refreshDashboard();
   showToast('成员信息已更新', 'success');
 }
 
@@ -263,16 +215,11 @@ export function confirmRemoveMember(id) {
 export async function removeMember(id) {
   var m = membersData.find(function(x) { return x.id === id; });
   if (m && id === getPrimaryAdminId()) { showToast('管理员不可移除', 'error'); closeModal(); return; }
-  var memberName = m ? m.name : '未知';
-  var operator = '管理员';
-  var operatorMember = membersData.find(function(x) { return x.role === 'admin'; });
-  if (operatorMember) operator = operatorMember.name;
   var btn = startLoading();
   var res = await apiDeleteMember(id);
   if (!res.ok) { stopLoading(btn, '确认移除'); showToast(res.error || '移除失败', 'error'); return; }
   closeModal();
-  await Promise.all([refreshFromApi(), refreshWalletStats()]);
-  addOplogRecord(operator, '删除成员', '移除成员 ' + memberName, '已移除');
+  await refreshDashboard();
   showToast('成员已移除', 'success');
 }
 
@@ -356,13 +303,6 @@ export async function executeBatchRemove() {
     return m && id !== getPrimaryAdminId();
   });
   if (targetIds.length === 0) { closeModal(); return; }
-  var targetNames = targetIds.map(function(id) {
-    var member = membersData.find(function(x) { return x.id === id; });
-    return member ? member.name : '未知';
-  });
-  var operator = '管理员';
-  var operatorMember = membersData.find(function(x) { return x.role === 'admin'; });
-  if (operatorMember) operator = operatorMember.name;
 
   var btn = startLoading();
   for (var i = 0; i < targetIds.length; i++) {
@@ -374,10 +314,7 @@ export async function executeBatchRemove() {
     }
   }
   closeModal();
-  await Promise.all([refreshFromApi(), refreshWalletStats()]);
-  targetNames.forEach(function(name) {
-    addOplogRecord(operator, '删除成员', '移除成员 ' + name, '已移除');
-  });
+  await refreshDashboard();
   cancelBatchSelect();
   showToast('已成功移除 ' + targetIds.length + ' 位成员', 'success');
 }
@@ -409,14 +346,8 @@ export async function confirmBatchDistribute() {
       return;
     }
   }
-  targetIds.forEach(function(tid) {
-    var target = membersData.find(function(m) { return m.id === tid; });
-    var targetName = target ? target.name : '未知';
-    addTransactionRecord(admin.name, '分发', '分发给 ' + targetName + ' ' + amount.toLocaleString() + ' 算力豆', -amount);
-    addOplogRecord(admin.name, '分发算力豆', '分发 ' + amount.toLocaleString() + ' 算力豆给 ' + targetName);
-  });
   closeModal();
-  await Promise.all([refreshFromApi(), refreshWalletStats()]);
+  await refreshDashboard();
   cancelBatchSelect();
   showToast('已成功向 ' + targetIds.length + ' 人各分发 ' + amount + ' 算力豆', 'success');
 }

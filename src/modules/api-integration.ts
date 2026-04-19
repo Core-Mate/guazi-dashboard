@@ -166,6 +166,14 @@ function snapshotCacheKey(range: string, custom?: { start?: string; end?: string
   return range + '|' + (custom && custom.start || '') + '|' + (custom && custom.end || '');
 }
 
+export function clearDashboardSnapshotCache(range?: string, custom?: { start?: string; end?: string }) {
+  if (range) {
+    delete snapshotCache[snapshotCacheKey(range, custom)]
+    return
+  }
+  snapshotCache = {}
+}
+
 function clearDashboardError() {
   var banner = document.querySelector('.dashboard-error-banner');
   if (banner) banner.remove();

@@ -4,18 +4,6 @@ import { downloadCSV } from './export-utils'
 
 var deviceSearchQuery = '';
 
-function currentDeviceStats() {
-  return deviceHeat.map(function(d) {
-    var exec = 0
-    var errors = 0
-    Object.values(d.cells || {}).forEach(function(c: any) {
-      exec += c.exec || 0
-      errors += c.fail || 0
-    })
-    return { id: d.id, exec: exec, errors: errors }
-  })
-}
-
 export function heatClass(exec, fail) {
   if (exec === 0) return 'h-mute';
   const r = fail / exec;
@@ -62,12 +50,12 @@ export function toggleDeviceSection() {
   }
 }
 
-export function updateDeviceBadge() {
-  const alertCount = currentDeviceStats().filter(d => d.exec > 0 && d.errors / d.exec >= 0.2).length;
+export function updateDeviceBadge(alertCount?: number) {
+  const count = Math.max(0, Math.round(Number(alertCount || 0)));
   const el = document.getElementById('deviceAlertBadge');
   if (!el) return;
-  if (alertCount > 0) {
-    el.innerHTML = `<span class="alert-count">${alertCount}</span>`;
+  if (count > 0) {
+    el.innerHTML = `<span class="alert-count">${count}</span>`;
   } else {
     el.innerHTML = '<span style="font-size:11px;color:#16a34a;font-weight:500;">全部正常</span>';
   }
@@ -139,7 +127,7 @@ function toNumber(value: any) {
   return isNaN(num) ? 0 : num
 }
 
-export function renderDevicesFromAggs(devices: any[], heat: any[]) {
+export function renderDevicesFromAggs(devices: any[], heat: any[], alertCount?: number) {
   if (!Array.isArray(devices)) return
 
   var platforms = Array.isArray(heat) && heat.length
@@ -185,5 +173,5 @@ export function renderDevicesFromAggs(devices: any[], heat: any[]) {
 
   renderDeviceMonitor()
   renderDeviceMetricsTable()
-  updateDeviceBadge()
+  updateDeviceBadge(alertCount)
 }

@@ -1,11 +1,8 @@
 import { openModal, closeModal, showToast } from './modal-toast'
-import { addTransactionRecord, addOplogRecord } from '../data/records'
 import { membersData } from '../data/members'
-import { apiDistributeCredits, fetchWallet } from '../data/api'
-import { renderMembers } from './members'
-import { animateNumber } from './animate'
+import { apiDistributeCredits } from '../data/api'
 import { renderOverviewOplogTable } from './records'
-import { fetchMembers as fetchMembersApi } from './api-integration'
+import { refreshDashboard } from '../main'
 
 function startLoading(label?: string) {
   var btn = document.querySelector('#modalFooter .modal-btn:not(.modal-btn-cancel)') as HTMLButtonElement;
@@ -17,7 +14,7 @@ function stopLoading(btn: HTMLButtonElement, label: string) {
 }
 
 export function renderOverviewOplog() {
-  renderOverviewOplogTable(10);
+  return renderOverviewOplogTable(10);
 }
 
 export function openDistributeToMember(id) {
@@ -55,9 +52,6 @@ export async function confirmDistribute() {
   var btn = startLoading();
   var member = membersData.find(function(x) { return x.id === memberId; });
   var memberName = member ? member.name : '未知';
-  var operator = '管理员';
-  var operatorMember = membersData.find(function(x) { return x.role === 'admin'; });
-  if (operatorMember) operator = operatorMember.name;
 
   var admin = membersData.find(function(x) { return x.role === 'admin'; });
   if (!admin) { stopLoading(btn, '确认分发'); showToast('找不到管理员账号', 'error'); return; }
@@ -67,28 +61,6 @@ export async function confirmDistribute() {
   if (!res.ok) { stopLoading(btn, '确认分发'); showToast(res.error || '分发失败', 'error'); return; }
 
   closeModal();
-  addTransactionRecord(operator, '分发', '分发给 ' + memberName + ' ' + amount.toLocaleString() + ' 算力豆', -amount);
-  addOplogRecord(operator, '分发算力豆', '分发 ' + amount.toLocaleString() + ' 算力豆给 ' + memberName);
-  renderOverviewOplog();
+  await refreshDashboard();
   showToast('✓ 成功分发 ' + amount.toLocaleString() + ' 算力豆给 ' + memberName, 'success');
-
-  var walletData = await fetchWallet();
-  if (walletData) {
-    animateNumber(document.getElementById('statWallet'), Math.round(walletData.total_balance));
-    animateNumber(document.getElementById('statConsumed'), Math.round(walletData.total_consumed));
-  }
-
-  var membData = await fetchMembersApi();
-  membersData.length = 0;
-  membData.forEach(function(m) {
-    membersData.push({
-      id: m.id,
-      name: m.username || '未知',
-      phone: m.phone || '',
-      role: m.role === 'admin' ? 'admin' : 'member',
-      balance: Math.round(m.balance),
-      joinDate: m.join_date ? m.join_date.slice(0, 10) : '',
-    });
-  });
-  renderMembers();
 }

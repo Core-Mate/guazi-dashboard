@@ -20,6 +20,8 @@ import auth
 from auth import require_api_key
 import db
 
+_EXPLORE_ENABLED = os.getenv("ENABLE_EXPLORE", "").lower() in ("1", "true", "yes")
+
 try:
     from cachetools import TTLCache
 except ImportError:  # pragma: no cover
@@ -339,30 +341,31 @@ async def _load_dashboard_ops_trend(
     return await queries._fetch_ops_trend(pool, tenant_id, cur_start, cur_end, unit)
 
 
-@app.get("/api/explore/tables")
-async def get_explore_tables(
-    tenant_id: int = Depends(require_api_key),
-    pool: Pool = Depends(db.get_pool),
-):
-    try:
-        return await get_queries_module().explore_tables(pool)
-    except asyncpg.PostgresError as exc:
-        return postgres_error_response(exc)
+if _EXPLORE_ENABLED:
+    @app.get("/api/explore/tables")
+    async def get_explore_tables(
+        tenant_id: int = Depends(require_api_key),
+        pool: Pool = Depends(db.get_pool),
+    ):
+        try:
+            return await get_queries_module().explore_tables(pool)
+        except asyncpg.PostgresError as exc:
+            return postgres_error_response(exc)
 
 
-@app.get("/api/explore/sample")
-async def get_sample_table(
-    table: str,
-    limit: int = Query(default=5, ge=1, le=100),
-    api_tenant_id: int = Depends(require_api_key),
-    pool: Pool = Depends(db.get_pool),
-):
-    try:
-        return await get_queries_module().sample_table(pool, table, limit, api_tenant_id)
-    except ValueError as exc:
-        return value_error_response(exc)
-    except asyncpg.PostgresError as exc:
-        return postgres_error_response(exc)
+    @app.get("/api/explore/sample")
+    async def get_sample_table(
+        table: str,
+        limit: int = Query(default=5, ge=1, le=100),
+        api_tenant_id: int = Depends(require_api_key),
+        pool: Pool = Depends(db.get_pool),
+    ):
+        try:
+            return await get_queries_module().sample_table(pool, table, limit, api_tenant_id)
+        except ValueError as exc:
+            return value_error_response(exc)
+        except asyncpg.PostgresError as exc:
+            return postgres_error_response(exc)
 
 
 @app.get("/api/stats/overview")

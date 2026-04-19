@@ -22,9 +22,20 @@ import { initCustomDropdowns } from './modules/dropdown'
 import { showLoader, hideLoader } from './modules/loader'
 import { bindRidgelineToggle, refreshRidgeline } from './modules/ridgeline-bind'
 import { pTag, initFilters, renderTaskTable, animateAllNumbers, getToday, getStatNum, setStatNum, prependTransaction, formatCompareText } from './modules/utils'
-import { tryLiveMembers, tryLiveWallet, tryLiveTransactions, tryLiveOpsData, populateMemberFilter, fetchDashboardData, applyBetaOverlays } from './modules/api-integration'
+import { tryLiveMembers, tryLiveWallet, tryLiveTransactions, populateMemberFilter, fetchDashboardData, applyBetaOverlays, clearDashboardSnapshotCache } from './modules/api-integration'
 import { PLATFORM_BREAKDOWN } from './data/platforms'
 import { INTERACTION_BREAKDOWN } from './data/charts'
+
+type DashboardCustomRange = { start: string; end: string } | undefined
+
+type DashboardRefreshOptions = {
+  includeAncillary?: boolean
+}
+
+var dashboardViewState: { range: string; custom?: DashboardCustomRange } = {
+  range: '7d',
+  custom: undefined,
+}
 
 function setText(id: string, value: string) {
   var el = document.getElementById(id)
@@ -146,31 +157,81 @@ function renderStatChange(id: string, cur: number, prev: number | null | undefin
   el.textContent = compare.text
 }
 
-async function bootDashboardSnapshot(range = '7d', custom?: { start: string; end: string }) {
-  var currentRange = range
-  var snap = await fetchDashboardData(range, custom)
+function snapshotOpsToChartData(snap: any) {
+  var trend = snap && snap.ops_trend
+  if (!trend) return null
+  return {
+    labels: Array.isArray(trend.labels) ? trend.labels : [],
+    dates: Array.isArray(trend.dates) && trend.dates.length
+      ? trend.dates
+      : (Array.isArray(trend.labels) ? trend.labels : []),
+    success: Array.isArray(trend.success) ? trend.success : [],
+    failed: Array.isArray(trend.failed) ? trend.failed : [],
+    total: Array.isArray(trend.total) ? trend.total : (Array.isArray(trend.exec) ? trend.exec : []),
+    comments: Array.isArray(trend.comments) ? trend.comments : [],
+    likes: Array.isArray(trend.likes) ? trend.likes : [],
+    dms: Array.isArray(trend.dms) ? trend.dms : [],
+    reach: Array.isArray(trend.reach) ? trend.reach : [],
+    credits: Array.isArray(trend.credits) ? trend.credits : [],
+    runtime: Array.isArray(trend.runtime_h) ? trend.runtime_h : [],
+    saves: Array.isArray(trend.saves) ? trend.saves : [],
+  }
+}
+
+function setDashboardViewState(range: string, custom?: DashboardCustomRange) {
+  dashboardViewState.range = range || '7d'
+  dashboardViewState.custom = dashboardViewState.range === 'custom' && custom && custom.start
+    ? { start: custom.start, end: custom.end }
+    : undefined
+}
+
+export async function refreshDashboard(
+  range?: string,
+  custom?: DashboardCustomRange,
+  options?: DashboardRefreshOptions,
+) {
+  var targetRange = range || dashboardViewState.range || '7d'
+  var targetCustom = targetRange === 'custom'
+    ? (custom || dashboardViewState.custom)
+    : undefined
+  setDashboardViewState(targetRange, targetCustom)
+  clearDashboardSnapshotCache(targetRange, targetCustom)
+  var snap = await fetchDashboardData(targetRange, targetCustom)
   ;(window as any).__lastSnap = snap
   refreshRidgeline((window as any).__lastSnap)
-  renderHighlightCards(snap.highlights.cards, range)
+  renderHighlightCards(snap.highlights.cards, targetRange)
   renderAchievements(snap.achievements.achievements)
-  if (snap.charts?.mini_stats) applyMiniStats(snap.charts.mini_stats, range, snap.highlights)
+  if (snap.charts?.mini_stats) applyMiniStats(snap.charts.mini_stats, targetRange, snap.highlights)
   if (snap.charts?.platform_breakdown) {
-    PLATFORM_BREAKDOWN[range] = snap.charts.platform_breakdown
-    createDonutChart(range)
+    PLATFORM_BREAKDOWN[targetRange] = snap.charts.platform_breakdown
+    createDonutChart(targetRange)
   }
   if (snap.charts?.interaction_breakdown) {
-    INTERACTION_BREAKDOWN[range] = snap.charts.interaction_breakdown
-    createInteractionDonut(range)
+    INTERACTION_BREAKDOWN[targetRange] = snap.charts.interaction_breakdown
+    createInteractionDonut(targetRange)
   }
   if (snap.aggs?.accounts) renderAccountsFromAggs(snap.aggs.accounts, snap.aggs.account_totals)
   if (snap.aggs?.skill_groups) {
     renderSkillGroupsFromAggs(snap.aggs.skill_groups)
   }
-  if (snap.aggs?.devices) renderDevicesFromAggs(snap.aggs.devices, snap.aggs.device_heat)
+  if (snap.aggs?.devices) renderDevicesFromAggs(snap.aggs.devices, snap.aggs.device_heat, snap.aggs.device_alert_count)
   if (snap.charts?.roi) renderRoiFromCharts(snap.charts.roi)
   applyBetaOverlays()
-  var opsData = await tryLiveOpsData(currentRange, custom)
-  if (opsData) updateCharts(currentRange, opsData)
+  var opsData = snapshotOpsToChartData(snap)
+  if (opsData) updateCharts(targetRange, opsData)
+  if (options && options.includeAncillary === false) return snap
+  await Promise.allSettled([
+    tryLiveMembers(),
+    tryLiveWallet(),
+    renderTransactions(paginationState.transactions.page, paginationState.transactions.pageSize),
+    renderOplog(paginationState.oplog.page, paginationState.oplog.pageSize),
+    renderOverviewOplog(),
+  ])
+  return snap
+}
+
+async function bootDashboardSnapshot(range = '7d', custom?: { start: string; end: string }) {
+  return refreshDashboard(range, custom, { includeAncillary: false })
 }
 
 // Expose all functions to window for inline onclick handlers
@@ -189,6 +250,7 @@ Object.assign(window, {
   generateReport, closeReportPreview, saveReportImage, switchReportDim, renderROIPlatformCard,
   renderAccountMetricsTable, searchAccount, exportAccountCSV,
   pTag, initFilters, renderTaskTable, animateAllNumbers, getToday, getStatNum, setStatNum, prependTransaction,
+  refreshDashboard,
   bootDashboardSnapshot,
 })
 

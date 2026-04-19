@@ -1,5 +1,4 @@
 import {
-  registerRecordOptimisticHandlers,
   replaceOplogData,
   replaceTransactionData,
 } from '../data/records'
@@ -115,12 +114,7 @@ function injectTableSkeletonRows(body, rowCount) {
   }
 }
 
-function hasOptimisticRows(items) {
-  return items.some(function(item) { return Boolean(item && item.__optimistic) })
-}
-
 function applyTransactionState(data) {
-  if (!data.items.length && !data.total && hasOptimisticRows(transactionState.items)) return
   transactionState.items = data.items.slice()
   transactionState.total = data.total
   transactionState.loaded = true
@@ -128,23 +122,8 @@ function applyTransactionState(data) {
 }
 
 function applyOplogState(data) {
-  if (!data.items.length && !data.total && hasOptimisticRows(oplogState.items)) return
   oplogState.items = data.items.slice()
   oplogState.total = data.total
-  oplogState.loaded = true
-  replaceOplogData(oplogState.items)
-}
-
-function prependOptimisticTransaction(item) {
-  transactionState.items = [item].concat(transactionState.items)
-  transactionState.total = Math.max(transactionState.total + 1, transactionState.items.length)
-  transactionState.loaded = true
-  replaceTransactionData(transactionState.items)
-}
-
-function prependOptimisticOplog(item) {
-  oplogState.items = [item].concat(oplogState.items)
-  oplogState.total = Math.max(oplogState.total + 1, oplogState.items.length)
   oplogState.loaded = true
   replaceOplogData(oplogState.items)
 }
@@ -428,18 +407,6 @@ function paintOverviewOplog(items, limit) {
   syncRecordSortHeaders('oplog', oplogSortKey, oplogSortDir)
 }
 
-registerRecordOptimisticHandlers({
-  onTransactionRecord: function(item) {
-    prependOptimisticTransaction(item)
-    paintTransactions()
-  },
-  onOplogRecord: function(item) {
-    prependOptimisticOplog(item)
-    paintOplog()
-    paintOverviewOplog(oplogState.items, overviewOplogLimit)
-  },
-})
-
 export async function renderOverviewOplogTable(limit?) {
   var body = document.getElementById('overviewOplogTbody')
   if (!body) {
@@ -449,8 +416,7 @@ export async function renderOverviewOplogTable(limit?) {
   var count = typeof limit === 'number' ? Math.min(limit, 5) : overviewOplogLimit
   overviewOplogLimit = count
   var data = await fetchAuditLog(1, count)
-  var items = data.items.length || data.total ? data.items : (hasOptimisticRows(oplogState.items) ? oplogState.items : [])
-  paintOverviewOplog(items, count)
+  paintOverviewOplog(data.items, count)
 }
 
 export function sortTransactions(key: 'time' | 'member' | 'type') {

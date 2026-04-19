@@ -705,6 +705,23 @@ function getGroupItems(group: any) {
   return Array.isArray(items) ? items : []
 }
 
+function getScenarioGroupId(group: any, fallback: string, index: number, usedIds?: Record<string, number>) {
+  var rawId = group && (group.id ?? group.key ?? group.group ?? group.category_group ?? group.name ?? group.label)
+  var baseId = String(rawId || fallback || ('scenario-' + (index + 1))).trim().toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  var resolvedId = baseId || ('scenario-' + (index + 1))
+  if (!usedIds) return resolvedId
+  var count = usedIds[resolvedId] || 0
+  usedIds[resolvedId] = count + 1
+  return count ? (resolvedId + '-' + (count + 1)) : resolvedId
+}
+
+function getScenarioGroupName(group: any, fallback: string) {
+  var name = String(group && (group.name ?? group.label ?? group.title) || '').trim()
+  return name || fallback
+}
+
 function mapSkillItems(items: any[], meta: any) {
   return items.map(function(item, index) {
     var success = num(item.success_count)
@@ -755,47 +772,25 @@ export function renderSkillGroupsFromAggs(groups: any[]) {
   scenarioGroups.length = 0
   enabledScenarios.length = 0
   Object.keys(skillData).forEach(function(key) { delete skillData[key] })
+  var usedGroupIds: Record<string, number> = {}
 
-  var mergedGroups: Record<string, any> = {}
-  var groupOrder: string[] = []
-
-  sourceGroups.forEach(function(group) {
+  sourceGroups.forEach(function(group, index) {
     var items = getGroupItems(group)
     if (!items.length) return
     var meta = groupMeta(group)
-    var existing = mergedGroups[meta.id]
-    if (!existing) {
-      existing = {
-        color: group.color || (meta.id === 'acquire' ? '#ff6900' : '#2196f3'),
-        meta: meta,
-        items: [],
-        success_count: 0,
-        total_credits: 0,
-      }
-      mergedGroups[meta.id] = existing
-      groupOrder.push(meta.id)
-    }
-    existing.items.push.apply(existing.items, items)
-    existing.success_count += getScenarioGroupSuccessCount(group)
-    existing.total_credits += getScenarioGroupTotalCredits(group)
-  })
-
-  groupOrder.forEach(function(groupId) {
-    var entry = mergedGroups[groupId]
-    if (!entry || !entry.items.length) return
-    var meta = entry.meta
+    var groupId = getScenarioGroupId(group, meta.id, index, usedGroupIds)
     scenarioGroups.push({
-      id: meta.id,
+      id: groupId,
       icon: meta.icon,
-      name: meta.name,
-      color: entry.color,
+      name: getScenarioGroupName(group, meta.name),
+      color: group.color || (meta.id === 'acquire' ? '#ff6900' : '#2196f3'),
       extraCols: meta.extraCols,
       extraFn: meta.extraFn,
-      success_count: entry.success_count,
-      total_credits: entry.total_credits,
+      success_count: getScenarioGroupSuccessCount(group),
+      total_credits: getScenarioGroupTotalCredits(group),
     })
-    enabledScenarios.push(meta.id)
-    skillData[meta.id] = mapSkillItems(entry.items, meta)
+    enabledScenarios.push(groupId)
+    skillData[groupId] = mapSkillItems(items, meta)
   })
 
   renderScenarioCards()
