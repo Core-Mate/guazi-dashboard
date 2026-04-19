@@ -1,10 +1,45 @@
+import { showToast } from '../modules/modal-toast';
+
 var API_BASE = ((import.meta as any).env && (import.meta as any).env.VITE_API_BASE) || '/api';
-var API_KEY = ((import.meta as any).env && (import.meta as any).env.VITE_API_KEY) || 'dev-key-guazi-2026';
+var MISSING_API_KEY_MESSAGE = '未配置 API Key，请联系管理员';
+var API_KEY_WARNING_FLAG = '__dashboardApiKeyMissingWarned__';
+
+function resolveApiKey(): string {
+  try {
+    var stored = localStorage.getItem('dashboardApiKey');
+    if (stored && stored.trim()) return stored.trim();
+  } catch {}
+  var envValue = ((import.meta as any).env && (import.meta as any).env.VITE_API_KEY) || '';
+  return typeof envValue === 'string' ? envValue.trim() : '';
+}
+
+function notifyMissingApiKey() {
+  var globalState = globalThis as any;
+  if (globalState[API_KEY_WARNING_FLAG]) return;
+  globalState[API_KEY_WARNING_FLAG] = true;
+  console.error(MISSING_API_KEY_MESSAGE);
+  try {
+    showToast(MISSING_API_KEY_MESSAGE, 'error');
+  } catch {}
+}
+
+function getApiKey(): string {
+  var apiKey = resolveApiKey();
+  if (!apiKey) {
+    notifyMissingApiKey();
+    return '';
+  }
+  return apiKey;
+}
+
+if (!resolveApiKey()) notifyMissingApiKey();
 
 export async function fetchJSON<T>(path: string): Promise<T | null> {
+  var apiKey = getApiKey();
+  if (!apiKey) return null;
   try {
     var res = await fetch(API_BASE + path, {
-      headers: { 'X-API-Key': API_KEY },
+      headers: { 'X-API-Key': apiKey },
     });
     if (!res.ok) return null;
     return await res.json();
@@ -57,11 +92,13 @@ export async function fetchCredits(days: number = 30) {
 var _apiPromise: Promise<boolean> | null = null;
 
 export function isApiAvailable(): Promise<boolean> {
+  var apiKey = getApiKey();
+  if (!apiKey) return Promise.resolve(false);
   if (_apiPromise) return _apiPromise;
   _apiPromise = (async function() {
     try {
       var res = await fetch(API_BASE + '/stats/overview?days=1', {
-        headers: { 'X-API-Key': API_KEY },
+        headers: { 'X-API-Key': apiKey },
         signal: AbortSignal.timeout(3000),
       });
       return res.ok;
@@ -152,10 +189,12 @@ export async function fetchAccounts() {
 }
 
 export async function mutateJSON<T>(method: string, path: string, body?: any): Promise<{ok: boolean; status: number; data: T | null; error?: string}> {
+  var apiKey = getApiKey();
+  if (!apiKey) return { ok: false, status: 0, data: null, error: MISSING_API_KEY_MESSAGE };
   try {
     var opts: RequestInit = {
       method: method,
-      headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' },
+      headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },
     };
     if (body !== undefined) opts.body = JSON.stringify(body);
     var res = await fetch(API_BASE + path, opts);

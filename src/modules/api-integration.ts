@@ -12,6 +12,7 @@ import { membersData } from '../data/members'
 import { accountList } from '../data/accounts'
 import { fmtHM } from '../data/helpers'
 import { rebuildCustomDropdown } from './dropdown'
+import { showToast } from './modal-toast'
 
 export interface HighlightCard {
   key: string;
@@ -93,6 +94,8 @@ export interface DashboardSnapshot {
 
 var SNAPSHOT_CACHE_TTL = 30000;
 var snapshotCache: Record<string, { expiresAt: number; data?: DashboardSnapshot; pending?: Promise<DashboardSnapshot> }> = {};
+var MISSING_API_KEY_MESSAGE = '未配置 API Key，请联系管理员';
+var API_KEY_WARNING_FLAG = '__dashboardApiKeyMissingWarned__';
 var EMPTY_OPS_DATA = {
   labels: [],
   dates: [],
@@ -203,10 +206,28 @@ export function showDashboardError(msg: string) {
 
 function getDashboardApiKey() {
   try {
-    return localStorage.getItem('dashboardApiKey') || 'dev-key-guazi-2026';
+    var stored = localStorage.getItem('dashboardApiKey')
+    if (stored && stored.trim()) return stored.trim()
   } catch {
-    return 'dev-key-guazi-2026';
   }
+  var envValue = ((import.meta as any).env && (import.meta as any).env.VITE_API_KEY) || ''
+  if (typeof envValue === 'string' && envValue.trim()) return envValue.trim()
+  var globalState = globalThis as any
+  if (!globalState[API_KEY_WARNING_FLAG]) {
+    globalState[API_KEY_WARNING_FLAG] = true
+    console.error(MISSING_API_KEY_MESSAGE)
+    try {
+      showToast(MISSING_API_KEY_MESSAGE, 'error')
+    } catch {}
+  }
+  return ''
+}
+
+getDashboardApiKey()
+
+function getDashboardApiHeaders() {
+  var apiKey = getDashboardApiKey()
+  return apiKey ? { 'X-API-Key': apiKey } : null
 }
 
 export function getDashboardTenantId() {
@@ -247,9 +268,14 @@ async function fetchDashboardJSON<T>(
   query?: URLSearchParams,
   tenantId?: string
 ): Promise<T | null> {
+  var headers = getDashboardApiHeaders()
+  if (!headers) {
+    showDashboardError(errorPrefix + '：' + MISSING_API_KEY_MESSAGE)
+    return null
+  }
   try {
     var resp = await fetch(buildDashboardUrl(path, query, tenantId), {
-      headers: { 'X-API-Key': getDashboardApiKey() },
+      headers: headers,
     })
     if (!resp.ok) {
       var msg = 'HTTP ' + resp.status
@@ -300,7 +326,12 @@ export async function fetchDashboardData(
         query.set('end', custom.end || '')
       }
       var qs = query.toString();
-      var headers = { 'X-API-Key': getDashboardApiKey() };
+      var headers = getDashboardApiHeaders();
+      if (!headers) {
+        delete snapshotCache[key];
+        showDashboardError('数据加载失败：' + MISSING_API_KEY_MESSAGE);
+        return cloneSnapshot(EMPTY_SNAPSHOT);
+      }
       var emptyHighlights = {
         highlights: EMPTY_SNAPSHOT.highlights,
         achievements: EMPTY_SNAPSHOT.achievements,
@@ -541,9 +572,11 @@ export interface TaskWeekSummary {
 }
 
 export async function fetchAccountWeekSummary(accountId: string, tenantId: string): Promise<AccountWeekSummary> {
+  var headers = getDashboardApiHeaders()
+  if (!headers) throw new Error(MISSING_API_KEY_MESSAGE)
   var url = buildDashboardUrl('/api/accounts/' + encodeURIComponent(accountId) + '/week-summary', undefined, tenantId)
   var resp = await fetch(url, {
-    headers: { 'X-API-Key': getDashboardApiKey() },
+    headers: headers,
   })
   if (!resp.ok) {
     throw new Error('HTTP ' + resp.status)
@@ -552,9 +585,11 @@ export async function fetchAccountWeekSummary(accountId: string, tenantId: strin
 }
 
 export async function fetchTaskWeekSummary(taskId: string): Promise<TaskWeekSummary> {
+  var headers = getDashboardApiHeaders()
+  if (!headers) throw new Error(MISSING_API_KEY_MESSAGE)
   var url = buildDashboardUrl('/api/tasks/' + encodeURIComponent(taskId) + '/week-summary')
   var resp = await fetch(url, {
-    headers: { 'X-API-Key': getDashboardApiKey() },
+    headers: headers,
   })
   if (!resp.ok) {
     throw new Error('HTTP ' + resp.status)

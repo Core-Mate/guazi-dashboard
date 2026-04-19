@@ -3,16 +3,19 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import Request, HTTPException
+from fastapi import HTTPException, Request
 
-load_dotenv(Path(__file__).with_name(".env"))
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 logger = logging.getLogger(__name__)
 API_KEYS = {}
 
 def _load_keys():
     API_KEYS.clear()
-    raw = os.getenv("DASHBOARD_API_KEYS", "")
+    raw = os.getenv("DASHBOARD_API_KEYS", "").strip()
+    dev_key = os.getenv("API_KEY", "").strip()
+    if not raw and not dev_key:
+        raise RuntimeError("No API key configured. Set DASHBOARD_API_KEYS or API_KEY env var.")
     if raw:
         for entry in raw.split(","):
             entry = entry.strip()
@@ -25,12 +28,10 @@ def _load_keys():
                     API_KEYS[key] = int(tid.strip())
                 except ValueError:
                     pass
-    dev_tenant_str = os.getenv("TENANT_ID")
-    if not dev_tenant_str:
-        raise RuntimeError("TENANT_ID environment variable is required. Please set it in api/.env")
-    dev_tenant = int(dev_tenant_str)
-    dev_key = os.getenv("API_KEY", "dev-key-guazi-2026").strip() or "dev-key-guazi-2026"
-    API_KEYS[dev_key] = dev_tenant
+    if dev_key:
+        API_KEYS[dev_key] = int(os.getenv("TENANT_ID", "1").strip())
+    if not API_KEYS:
+        raise RuntimeError("No API key configured. Set DASHBOARD_API_KEYS or API_KEY env var.")
 
 _load_keys()
 
@@ -64,3 +65,6 @@ async def require_api_key(request: Request) -> int:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     return tenant_id
+
+
+verify_api_key = require_api_key
