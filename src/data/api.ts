@@ -32,6 +32,17 @@ function getApiKey(): string {
   return apiKey;
 }
 
+function newIdempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID()
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    var r = Math.random() * 16 | 0
+    var v = c === 'x' ? r : (r & 0x3 | 0x8)
+    return v.toString(16)
+  })
+}
+
 if (!resolveApiKey()) notifyMissingApiKey();
 
 export async function fetchJSON<T>(path: string): Promise<T | null> {
@@ -194,7 +205,11 @@ export async function mutateJSON<T>(method: string, path: string, body?: any): P
   try {
     var opts: RequestInit = {
       method: method,
-      headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },
+      headers: {
+        'X-API-Key': apiKey,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': newIdempotencyKey(),
+      },
     };
     if (body !== undefined) opts.body = JSON.stringify(body);
     var res = await fetch(API_BASE + path, opts);

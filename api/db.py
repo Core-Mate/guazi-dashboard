@@ -60,6 +60,28 @@ async def init_pool() -> None:
         },
     )
 
+    async with _pool.acquire() as conn:
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS mutation_idempotency (
+              id BIGSERIAL PRIMARY KEY,
+              idempotency_key VARCHAR(64) NOT NULL,
+              tenant_id INT NOT NULL,
+              endpoint VARCHAR(120) NOT NULL,
+              request_hash VARCHAR(64) NOT NULL,
+              response_json TEXT NOT NULL,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              UNIQUE (tenant_id, idempotency_key)
+            );
+            """
+        )
+        await conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS mutation_idempotency_created_idx
+              ON mutation_idempotency (created_at);
+            """
+        )
+
 
 async def close_pool() -> None:
     global _pool

@@ -11,7 +11,7 @@ from typing import Any, Awaitable, Callable, Optional
 import asyncpg
 import uvicorn
 from asyncpg import Pool
-from fastapi import Depends, FastAPI, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -570,7 +570,9 @@ class DistributeRequest(BaseModel):
 
 @app.post("/api/credits/distribute")
 async def api_distribute_credits(
+    request: Request,
     body: DistributeRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
     tenant_id: int = Depends(require_api_key),
     pool: Pool = Depends(db.get_pool),
 ):
@@ -579,12 +581,28 @@ async def api_distribute_credits(
     if body.operator_id == body.target_user_id:
         return value_error_response(ValueError("operator and target must be different users"))
     try:
+        req_dict = body.model_dump()
         remark = _normalize_remark(body.remark)
-        await get_queries_module().distribute_credits(
-            pool, body.operator_id, body.target_user_id, body.amount, remark, tenant_id
-        )
+        queries_module = get_queries_module()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                existing, body_hash = await queries_module.check_idempotency(
+                    conn, tenant_id, idempotency_key, req_dict
+                )
+                if existing == "conflict":
+                    raise HTTPException(409, "Idempotency key conflict")
+                if existing:
+                    return existing
+                await queries_module.distribute_credits_with_conn(
+                    conn, body.operator_id, body.target_user_id, body.amount, remark, tenant_id
+                )
+                result = {"success": True}
+                await queries_module.record_idempotency(
+                    conn, tenant_id, idempotency_key, request.url.path, body_hash, result
+                )
+        queries_module.clear_mutation_caches()
         _clear_dashboard_component_caches()
-        return {"success": True}
+        return result
     except ValueError as exc:
         return value_error_response(exc)
     except asyncpg.PostgresError as exc:
@@ -599,22 +617,41 @@ class UpdateMemberRequest(BaseModel):
 
 @app.put("/api/members/{user_id}")
 async def api_update_member(
+    request: Request,
     user_id: int,
     body: UpdateMemberRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
     tenant_id: int = Depends(require_api_key),
     pool: Pool = Depends(db.get_pool),
 ):
     try:
-        name = _normalize_member_text(body.name, field_name="name") if body.name is not None else None
-        phone_number = _normalize_member_text(body.phone_number, field_name="phone_number") if body.phone_number is not None else None
-        role = _normalize_member_role(body.role) if body.role is not None else None
-        if name is None and phone_number is None and role is None:
-            raise ValueError("at least one update field must be provided")
-        await get_queries_module().update_member(
-            pool, user_id, tenant_id, name, phone_number, role
-        )
+        req_dict = body.model_dump()
+        req_dict["user_id"] = user_id
+        queries_module = get_queries_module()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                existing, body_hash = await queries_module.check_idempotency(
+                    conn, tenant_id, idempotency_key, req_dict
+                )
+                if existing == "conflict":
+                    raise HTTPException(409, "Idempotency key conflict")
+                if existing:
+                    return existing
+                name = _normalize_member_text(body.name, field_name="name") if body.name is not None else None
+                phone_number = _normalize_member_text(body.phone_number, field_name="phone_number") if body.phone_number is not None else None
+                role = _normalize_member_role(body.role) if body.role is not None else None
+                if name is None and phone_number is None and role is None:
+                    raise ValueError("at least one update field must be provided")
+                await queries_module.update_member_with_conn(
+                    conn, user_id, tenant_id, name, phone_number, role
+                )
+                result = {"success": True}
+                await queries_module.record_idempotency(
+                    conn, tenant_id, idempotency_key, request.url.path, body_hash, result
+                )
+        queries_module.clear_mutation_caches()
         _clear_dashboard_component_caches()
-        return {"success": True}
+        return result
     except ValueError as exc:
         return value_error_response(exc)
     except asyncpg.PostgresError as exc:
@@ -623,14 +660,32 @@ async def api_update_member(
 
 @app.delete("/api/members/{user_id}")
 async def api_delete_member(
+    request: Request,
     user_id: int,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
     tenant_id: int = Depends(require_api_key),
     pool: Pool = Depends(db.get_pool),
 ):
     try:
-        await get_queries_module().delete_member(pool, user_id, tenant_id)
+        req_dict = {"user_id": user_id}
+        queries_module = get_queries_module()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                existing, body_hash = await queries_module.check_idempotency(
+                    conn, tenant_id, idempotency_key, req_dict
+                )
+                if existing == "conflict":
+                    raise HTTPException(409, "Idempotency key conflict")
+                if existing:
+                    return existing
+                await queries_module.delete_member_with_conn(conn, user_id, tenant_id)
+                result = {"success": True}
+                await queries_module.record_idempotency(
+                    conn, tenant_id, idempotency_key, request.url.path, body_hash, result
+                )
+        queries_module.clear_mutation_caches()
         _clear_dashboard_component_caches()
-        return {"success": True}
+        return result
     except ValueError as exc:
         return value_error_response(exc)
     except asyncpg.PostgresError as exc:
@@ -646,19 +701,37 @@ class AddMemberRequest(BaseModel):
 
 @app.post("/api/members")
 async def api_add_member(
+    request: Request,
     body: AddMemberRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
     tenant_id: int = Depends(require_api_key),
     pool: Pool = Depends(db.get_pool),
 ):
     try:
-        name = _normalize_member_text(body.name, field_name="name", required=True)
-        phone_number = _normalize_member_text(body.phone_number, field_name="phone_number", required=True)
-        role = _normalize_member_role(body.role) if body.role is not None else None
-        new_id = await get_queries_module().add_member(
-            pool, name, phone_number, role, body.initial_balance, tenant_id
-        )
+        req_dict = body.model_dump()
+        queries_module = get_queries_module()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                existing, body_hash = await queries_module.check_idempotency(
+                    conn, tenant_id, idempotency_key, req_dict
+                )
+                if existing == "conflict":
+                    raise HTTPException(409, "Idempotency key conflict")
+                if existing:
+                    return existing
+                name = _normalize_member_text(body.name, field_name="name", required=True)
+                phone_number = _normalize_member_text(body.phone_number, field_name="phone_number", required=True)
+                role = _normalize_member_role(body.role) if body.role is not None else None
+                new_id = await queries_module.add_member_with_conn(
+                    conn, name, phone_number, role, body.initial_balance, tenant_id
+                )
+                result = {"id": new_id, "success": True}
+                await queries_module.record_idempotency(
+                    conn, tenant_id, idempotency_key, request.url.path, body_hash, result
+                )
+        queries_module.clear_mutation_caches()
         _clear_dashboard_component_caches()
-        return {"id": new_id, "success": True}
+        return result
     except ValueError as exc:
         return value_error_response(exc)
     except asyncpg.PostgresError as exc:

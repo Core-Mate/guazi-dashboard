@@ -2679,224 +2679,268 @@ async def get_audit_log(
         return audit_log
 
 
-async def distribute_credits(pool: Pool, operator_id: int, target_user_id: int, amount: int, remark: str, api_tenant_id: int) -> None:
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            if operator_id == target_user_id:
-                raise ValueError("operator and target must be different users")
-
-            op_user = await conn.fetchrow(
-                'SELECT id, name, tenant_id, "phoneNumber" FROM users WHERE id = $1 AND tenant_id = $2 AND NOT is_deleted',
-                operator_id, api_tenant_id,
-            )
-            if not op_user:
-                raise ValueError("operator not found")
-
-            tgt_user = await conn.fetchrow(
-                'SELECT id, name, tenant_id, "phoneNumber" FROM users WHERE id = $1 AND tenant_id = $2 AND NOT is_deleted',
-                target_user_id, api_tenant_id,
-            )
-            if not tgt_user:
-                raise ValueError("target user not found")
-
-            if op_user["tenant_id"] != tgt_user["tenant_id"]:
-                raise ValueError("operator and target must belong to the same tenant")
-
-            tenant_id = op_user["tenant_id"]
-
-            locked_balance_rows: dict[int, Any] = {}
-            for locked_user_id in sorted({operator_id, target_user_id}):
-                balance_row = await conn.fetchrow(
-                    'SELECT user_id, remaining, version FROM user_balance WHERE user_id = $1 FOR UPDATE',
-                    locked_user_id,
-                )
-                if balance_row:
-                    locked_balance_rows[locked_user_id] = balance_row
-
-            operator_balance_row = locked_balance_rows.get(operator_id)
-            if not operator_balance_row:
-                raise ValueError("operator has no balance record")
-
-            target_balance_row = locked_balance_rows.get(target_user_id)
-            if not target_balance_row:
-                raise ValueError("target user has no balance record")
-
-            if operator_balance_row["remaining"] < amount:
-                raise ValueError("insufficient balance")
-
-            version = operator_balance_row["version"]
-            updated = await conn.fetchval(
-                'UPDATE user_balance SET remaining = remaining - $1, version = version + 1 WHERE user_id = $2 AND version = $3 RETURNING id',
-                amount, operator_id, version,
-            )
-            if not updated:
-                raise ValueError("concurrent modification detected, please retry")
-
-            tgt_updated = await conn.fetchval(
-                'UPDATE user_balance SET remaining = remaining + $1, version = version + 1 WHERE user_id = $2 AND version = $3 RETURNING id',
-                amount, target_user_id, target_balance_row["version"],
-            )
-            if not tgt_updated:
-                raise ValueError("concurrent modification detected, please retry")
-
-            op_balance_after = await conn.fetchval(
-                'SELECT remaining FROM user_balance WHERE user_id = $1',
-                operator_id,
-            )
-            tgt_balance_after = await conn.fetchval(
-                'SELECT remaining FROM user_balance WHERE user_id = $1',
-                target_user_id,
-            )
-
-            await conn.execute(
-                """
-                INSERT INTO credit_flow (user_id, change_type, change_amount, balance_after, remark)
-                VALUES ($1, 'DISTRIBUTE', $2, $3, $4)
-                """,
-                operator_id, -amount, op_balance_after, remark or f"分发给 {tgt_user['name']}",
-            )
-            await conn.execute(
-                """
-                INSERT INTO credit_flow (user_id, change_type, change_amount, balance_after, remark)
-                VALUES ($1, 'DISTRIBUTE', $2, $3, $4)
-                """,
-                target_user_id, amount, tgt_balance_after, remark or f"来自 {op_user['name']} 的分发",
-            )
-
-            await conn.execute(
-                """
-                INSERT INTO enterprise_audit_log
-                    (operator_id, operator_name, tenant_id, action, target_user_id, target_user_name, credits_amount, remark)
-                VALUES ($1, $2, $3, 'TRANSFER_CREDITS', $4, $5, $6, $7)
-                """,
-                operator_id, op_user["name"], tenant_id,
-                target_user_id, tgt_user["name"], amount, remark,
-            )
-
-            await conn.execute(
-                """
-                INSERT INTO enterprise_recharge_record
-                    (operator_id, operator_name, target_user_id, target_user_phone, target_user_name, target_tenant_id, credits_amount, remark)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                """,
-                operator_id, op_user["name"],
-                target_user_id,
-                tgt_user["phoneNumber"],
-                tgt_user["name"],
-                tenant_id, amount, remark,
-            )
+def clear_mutation_caches() -> None:
     _snapshot_cache.clear()
     _tx_cache.clear()
     _oplog_cache.clear()
+
+
+async def distribute_credits_with_conn(conn, operator_id: int, target_user_id: int, amount: int, remark: str, api_tenant_id: int) -> None:
+    if operator_id == target_user_id:
+        raise ValueError("operator and target must be different users")
+
+    op_user = await conn.fetchrow(
+        'SELECT id, name, tenant_id, "phoneNumber" FROM users WHERE id = $1 AND tenant_id = $2 AND NOT is_deleted',
+        operator_id, api_tenant_id,
+    )
+    if not op_user:
+        raise ValueError("operator not found")
+
+    tgt_user = await conn.fetchrow(
+        'SELECT id, name, tenant_id, "phoneNumber" FROM users WHERE id = $1 AND tenant_id = $2 AND NOT is_deleted',
+        target_user_id, api_tenant_id,
+    )
+    if not tgt_user:
+        raise ValueError("target user not found")
+
+    if op_user["tenant_id"] != tgt_user["tenant_id"]:
+        raise ValueError("operator and target must belong to the same tenant")
+
+    tenant_id = op_user["tenant_id"]
+
+    locked_balance_rows: dict[int, Any] = {}
+    for locked_user_id in sorted({operator_id, target_user_id}):
+        balance_row = await conn.fetchrow(
+            'SELECT user_id, remaining, version FROM user_balance WHERE user_id = $1 FOR UPDATE',
+            locked_user_id,
+        )
+        if balance_row:
+            locked_balance_rows[locked_user_id] = balance_row
+
+    operator_balance_row = locked_balance_rows.get(operator_id)
+    if not operator_balance_row:
+        raise ValueError("operator has no balance record")
+
+    target_balance_row = locked_balance_rows.get(target_user_id)
+    if not target_balance_row:
+        raise ValueError("target user has no balance record")
+
+    if operator_balance_row["remaining"] < amount:
+        raise ValueError("insufficient balance")
+
+    version = operator_balance_row["version"]
+    updated = await conn.fetchval(
+        'UPDATE user_balance SET remaining = remaining - $1, version = version + 1 WHERE user_id = $2 AND version = $3 RETURNING id',
+        amount, operator_id, version,
+    )
+    if not updated:
+        raise ValueError("concurrent modification detected, please retry")
+
+    tgt_updated = await conn.fetchval(
+        'UPDATE user_balance SET remaining = remaining + $1, version = version + 1 WHERE user_id = $2 AND version = $3 RETURNING id',
+        amount, target_user_id, target_balance_row["version"],
+    )
+    if not tgt_updated:
+        raise ValueError("concurrent modification detected, please retry")
+
+    op_balance_after = await conn.fetchval(
+        'SELECT remaining FROM user_balance WHERE user_id = $1',
+        operator_id,
+    )
+    tgt_balance_after = await conn.fetchval(
+        'SELECT remaining FROM user_balance WHERE user_id = $1',
+        target_user_id,
+    )
+
+    await conn.execute(
+        """
+        INSERT INTO credit_flow (user_id, change_type, change_amount, balance_after, remark)
+        VALUES ($1, 'DISTRIBUTE', $2, $3, $4)
+        """,
+        operator_id, -amount, op_balance_after, remark or f"分发给 {tgt_user['name']}",
+    )
+    await conn.execute(
+        """
+        INSERT INTO credit_flow (user_id, change_type, change_amount, balance_after, remark)
+        VALUES ($1, 'DISTRIBUTE', $2, $3, $4)
+        """,
+        target_user_id, amount, tgt_balance_after, remark or f"来自 {op_user['name']} 的分发",
+    )
+
+    await conn.execute(
+        """
+        INSERT INTO enterprise_audit_log
+            (operator_id, operator_name, tenant_id, action, target_user_id, target_user_name, credits_amount, remark)
+        VALUES ($1, $2, $3, 'TRANSFER_CREDITS', $4, $5, $6, $7)
+        """,
+        operator_id, op_user["name"], tenant_id,
+        target_user_id, tgt_user["name"], amount, remark,
+    )
+
+    await conn.execute(
+        """
+        INSERT INTO enterprise_recharge_record
+            (operator_id, operator_name, target_user_id, target_user_phone, target_user_name, target_tenant_id, credits_amount, remark)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        """,
+        operator_id, op_user["name"],
+        target_user_id,
+        tgt_user["phoneNumber"],
+        tgt_user["name"],
+        tenant_id, amount, remark,
+    )
+
+
+async def distribute_credits(pool: Pool, operator_id: int, target_user_id: int, amount: int, remark: str, api_tenant_id: int) -> None:
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await distribute_credits_with_conn(conn, operator_id, target_user_id, amount, remark, api_tenant_id)
+    clear_mutation_caches()
+
+
+async def update_member_with_conn(conn, user_id: int, tenant_id: int, name: str | None, phone_number: str | None, role: str | None) -> None:
+    before = await conn.fetchrow(
+        'SELECT id, name, "phoneNumber", role FROM users WHERE id = $1 AND tenant_id = $2 AND NOT is_deleted',
+        user_id, tenant_id,
+    )
+    if not before:
+        raise ValueError("user not found")
+
+    await conn.execute(
+        """
+        UPDATE users
+        SET name = COALESCE($1, name),
+            "phoneNumber" = COALESCE($2, "phoneNumber"),
+            role = COALESCE($3, role)
+        WHERE id = $4 AND tenant_id = $5 AND NOT is_deleted
+        """,
+        name, phone_number, role, user_id, tenant_id,
+    )
+
+    after = await conn.fetchrow(
+        'SELECT id, name, "phoneNumber", role FROM users WHERE id = $1',
+        user_id,
+    )
+
+    await conn.execute(
+        """
+        INSERT INTO enterprise_audit_log
+            (operator_id, operator_name, tenant_id, action, target_user_id, target_user_name, before_snapshot, after_snapshot)
+        VALUES ($1, $2, $3, 'MEMBER_UPDATE', $4, $5, $6, $7)
+        """,
+        user_id, before["name"], tenant_id,
+        user_id, after["name"],
+        json.dumps(dict(before), default=str),
+        json.dumps(dict(after), default=str),
+    )
 
 
 async def update_member(pool: Pool, user_id: int, tenant_id: int, name: str | None, phone_number: str | None, role: str | None) -> None:
     async with pool.acquire() as conn:
         async with conn.transaction():
-            before = await conn.fetchrow(
-                'SELECT id, name, "phoneNumber", role FROM users WHERE id = $1 AND tenant_id = $2 AND NOT is_deleted',
-                user_id, tenant_id,
-            )
-            if not before:
-                raise ValueError("user not found")
+            await update_member_with_conn(conn, user_id, tenant_id, name, phone_number, role)
+    clear_mutation_caches()
 
-            await conn.execute(
-                """
-                UPDATE users
-                SET name = COALESCE($1, name),
-                    "phoneNumber" = COALESCE($2, "phoneNumber"),
-                    role = COALESCE($3, role)
-                WHERE id = $4 AND tenant_id = $5 AND NOT is_deleted
-                """,
-                name, phone_number, role, user_id, tenant_id,
-            )
 
-            after = await conn.fetchrow(
-                'SELECT id, name, "phoneNumber", role FROM users WHERE id = $1',
-                user_id,
-            )
+async def delete_member_with_conn(conn, user_id: int, tenant_id: int) -> None:
+    user = await conn.fetchrow(
+        'SELECT id, name FROM users WHERE id = $1 AND tenant_id = $2 AND NOT is_deleted',
+        user_id, tenant_id,
+    )
+    if not user:
+        raise ValueError("user not found")
 
-            await conn.execute(
-                """
-                INSERT INTO enterprise_audit_log
-                    (operator_id, operator_name, tenant_id, action, target_user_id, target_user_name, before_snapshot, after_snapshot)
-                VALUES ($1, $2, $3, 'MEMBER_UPDATE', $4, $5, $6, $7)
-                """,
-                user_id, before["name"], tenant_id,
-                user_id, after["name"],
-                json.dumps(dict(before), default=str),
-                json.dumps(dict(after), default=str),
-            )
-    _snapshot_cache.clear()
-    _tx_cache.clear()
-    _oplog_cache.clear()
+    await conn.execute(
+        'UPDATE users SET is_deleted = true, is_active = false WHERE id = $1 AND tenant_id = $2',
+        user_id, tenant_id,
+    )
+
+    await conn.execute(
+        """
+        INSERT INTO enterprise_audit_log
+            (operator_id, operator_name, tenant_id, action, target_user_id, target_user_name)
+        VALUES ($1, $2, $3, 'REMOVE_MEMBER', $4, $5)
+        """,
+        user_id, user["name"], tenant_id, user_id, user["name"],
+    )
 
 
 async def delete_member(pool: Pool, user_id: int, tenant_id: int) -> None:
     async with pool.acquire() as conn:
         async with conn.transaction():
-            user = await conn.fetchrow(
-                'SELECT id, name FROM users WHERE id = $1 AND tenant_id = $2 AND NOT is_deleted',
-                user_id, tenant_id,
-            )
-            if not user:
-                raise ValueError("user not found")
+            await delete_member_with_conn(conn, user_id, tenant_id)
+    clear_mutation_caches()
 
-            await conn.execute(
-                'UPDATE users SET is_deleted = true, is_active = false WHERE id = $1 AND tenant_id = $2',
-                user_id, tenant_id,
-            )
 
-            await conn.execute(
-                """
-                INSERT INTO enterprise_audit_log
-                    (operator_id, operator_name, tenant_id, action, target_user_id, target_user_name)
-                VALUES ($1, $2, $3, 'REMOVE_MEMBER', $4, $5)
-                """,
-                user_id, user["name"], tenant_id, user_id, user["name"],
-            )
-    _snapshot_cache.clear()
-    _tx_cache.clear()
-    _oplog_cache.clear()
+async def add_member_with_conn(conn, name: str, phone_number: str, role: str | None, initial_balance: int, tenant_id: int) -> int:
+    role_value = role or "member"
+    new_id = await conn.fetchval(
+        """
+        INSERT INTO users (name, email, "emailVerified", "phoneNumber", role, tenant_id,
+                           is_deleted, is_active, "createdAt", "updatedAt")
+        VALUES ($1, $2, false, $3, $4, $5, false, true, NOW(), NOW())
+        RETURNING id
+        """,
+        name, f"{phone_number}+{int(__import__('time').time())}@placeholder.local", phone_number, role_value, tenant_id,
+    )
+
+    await conn.execute(
+        'INSERT INTO user_balance (user_id, remaining) VALUES ($1, $2)',
+        new_id, initial_balance,
+    )
+
+    if initial_balance > 0:
+        await conn.execute(
+            """
+            INSERT INTO credit_flow (user_id, change_type, change_amount, balance_after, remark)
+            VALUES ($1, 'RECHARGE', $2, $3, '新成员初始余额')
+            """,
+            new_id, initial_balance, initial_balance,
+        )
+
+    await conn.execute(
+        """
+        INSERT INTO enterprise_audit_log
+            (operator_id, operator_name, tenant_id, action, target_user_id, target_user_name, credits_amount)
+        VALUES ($1, $2, $3, 'ADD_MEMBER', $4, $5, $6)
+        """,
+        new_id, name, tenant_id, new_id, name, initial_balance,
+    )
+    return new_id
 
 
 async def add_member(pool: Pool, name: str, phone_number: str, role: str | None, initial_balance: int, tenant_id: int) -> int:
     async with pool.acquire() as conn:
         async with conn.transaction():
-            role_value = role or "member"
-            new_id = await conn.fetchval(
-                """
-                INSERT INTO users (name, email, "emailVerified", "phoneNumber", role, tenant_id,
-                                   is_deleted, is_active, "createdAt", "updatedAt")
-                VALUES ($1, $2, false, $3, $4, $5, false, true, NOW(), NOW())
-                RETURNING id
-                """,
-                name, f"{phone_number}+{int(__import__('time').time())}@placeholder.local", phone_number, role_value, tenant_id,
-            )
-
-            await conn.execute(
-                'INSERT INTO user_balance (user_id, remaining) VALUES ($1, $2)',
-                new_id, initial_balance,
-            )
-
-            if initial_balance > 0:
-                await conn.execute(
-                    """
-                    INSERT INTO credit_flow (user_id, change_type, change_amount, balance_after, remark)
-                    VALUES ($1, 'RECHARGE', $2, $3, '新成员初始余额')
-                    """,
-                    new_id, initial_balance, initial_balance,
-                )
-
-            await conn.execute(
-                """
-                INSERT INTO enterprise_audit_log
-                    (operator_id, operator_name, tenant_id, action, target_user_id, target_user_name, credits_amount)
-                VALUES ($1, $2, $3, 'ADD_MEMBER', $4, $5, $6)
-                """,
-                new_id, name, tenant_id, new_id, name, initial_balance,
-            )
-    _snapshot_cache.clear()
-    _tx_cache.clear()
-    _oplog_cache.clear()
+            new_id = await add_member_with_conn(conn, name, phone_number, role, initial_balance, tenant_id)
+    clear_mutation_caches()
     return new_id
+
+
+async def check_idempotency(conn, tenant_id: int, key: str, request_body: dict):
+    import hashlib, json
+    body_hash = hashlib.sha256(
+        json.dumps(request_body, sort_keys=True, default=str).encode()
+    ).hexdigest()
+    row = await conn.fetchrow(
+        "SELECT request_hash, response_json FROM mutation_idempotency "
+        "WHERE tenant_id = $1 AND idempotency_key = $2",
+        tenant_id, key
+    )
+    if row is None:
+        return None, body_hash
+    if row['request_hash'] != body_hash:
+        return 'conflict', body_hash
+    return json.loads(row['response_json']), body_hash
+
+
+async def record_idempotency(conn, tenant_id: int, key: str, endpoint: str,
+                             body_hash: str, response: dict):
+    import json
+    await conn.execute(
+        "INSERT INTO mutation_idempotency "
+        "(idempotency_key, tenant_id, endpoint, request_hash, response_json) "
+        "VALUES ($1, $2, $3, $4, $5) "
+        "ON CONFLICT (tenant_id, idempotency_key) DO NOTHING",
+        key, tenant_id, endpoint, body_hash, json.dumps(response, default=str)
+    )
