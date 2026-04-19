@@ -146,6 +146,8 @@ _dashboard_aggs_cache = TTLCache(maxsize=_DASHBOARD_CACHE_MAXSIZE, ttl=_DASHBOAR
 _dashboard_aggs_lock = asyncio.Lock()
 _dashboard_ops_trend_cache = TTLCache(maxsize=_DASHBOARD_CACHE_MAXSIZE, ttl=_DASHBOARD_CACHE_TTL)
 _dashboard_ops_trend_lock = asyncio.Lock()
+_WARMUP_TASK_TIMEOUT_SECONDS = 90.0
+_WARMUP_TICK_TIMEOUT_SECONDS = 120.0
 
 
 def tenant_key_fn(request: Request) -> str:
@@ -239,8 +241,33 @@ async def _refill_hot_caches() -> None:
                     ),
                 ),
             )
+            async def _run_warmer(name: str, warmer: Callable[[], Awaitable[Any]]) -> Any:
+                warmer_started_at = time.perf_counter()
+                try:
+                    result = await asyncio.wait_for(warmer(), timeout=_WARMUP_TASK_TIMEOUT_SECONDS)
+                except asyncio.TimeoutError:
+                    elapsed = time.perf_counter() - warmer_started_at
+                    logger.error(
+                        "Dashboard %s warmup timed out after %.3fs for tenant_id=%s range=%s",
+                        name,
+                        elapsed,
+                        tenant_id,
+                        range_value,
+                    )
+                    raise
+                elapsed = time.perf_counter() - warmer_started_at
+                logger.info(
+                    "Dashboard %s warmup completed in %.3fs for tenant_id=%s range=%s",
+                    name,
+                    elapsed,
+                    tenant_id,
+                    range_value,
+                )
+                return result
+
+            range_started_at = time.perf_counter()
             results = await asyncio.gather(
-                *(warmer() for _, warmer in warmers),
+                *(_run_warmer(name, warmer) for name, warmer in warmers),
                 return_exceptions=True,
             )
             failures = [
@@ -259,7 +286,8 @@ async def _refill_hot_caches() -> None:
                     )
             else:
                 logger.info(
-                    "Dashboard warmup completed for tenant_id=%s range=%s",
+                    "Dashboard warmup completed in %.3fs for tenant_id=%s range=%s",
+                    time.perf_counter() - range_started_at,
                     tenant_id,
                     range_value,
                 )
@@ -274,10 +302,21 @@ async def _refill_hot_caches() -> None:
 
 async def _hot_cache_tick_loop(interval_seconds: int = 60):
     while True:
+        tick_started_at = time.perf_counter()
         try:
-            await _refill_hot_caches()
+            await asyncio.wait_for(_refill_hot_caches(), timeout=_WARMUP_TICK_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            logger.error(
+                "Dashboard hot cache tick timed out after %.3fs",
+                time.perf_counter() - tick_started_at,
+            )
         except Exception:
             logger.exception("Dashboard hot cache refill failed")
+        finally:
+            logger.info(
+                "Dashboard hot cache tick iteration completed in %.3fs",
+                time.perf_counter() - tick_started_at,
+            )
         await asyncio.sleep(interval_seconds)
 
 
@@ -361,15 +400,30 @@ app.add_middleware(SlowAPIMiddleware)
 
 
 @app.get("/health")
-async def health_check():
+async def health_check(pool: Pool = Depends(db.get_pool)):
+    conn = None
     try:
-        pool = await db.get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute("SELECT 1")
-        return {"status": "ok"}
-    except Exception:
+        conn = await asyncio.wait_for(pool.acquire(), timeout=2.0)
+        try:
+            await asyncio.wait_for(conn.fetchval("SELECT 1"), timeout=2.0)
+        finally:
+            await pool.release(conn)
+            conn = None
+        pool_stats = {
+            "size": pool.get_size(),
+            "idle_size": pool.get_idle_size(),
+            "free": pool.get_size() - pool.get_idle_size(),
+        }
+        return {"ok": True, "pool": pool_stats}
+    except asyncio.TimeoutError as exc:
+        logger.exception("Dashboard health check timed out")
+        raise HTTPException(status_code=503, detail="DB not responsive") from exc
+    except Exception as exc:
         logger.exception("Dashboard health check failed")
-        return JSONResponse(status_code=503, content={"status": "error"})
+        raise HTTPException(status_code=503, detail="DB not responsive") from exc
+    finally:
+        if conn is not None:
+            await pool.release(conn)
 
 
 @app.get("/ready")

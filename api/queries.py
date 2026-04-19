@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 import time
 from collections import OrderedDict, defaultdict
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Awaitable, Optional
 
 from asyncpg import Pool
+from fastapi import HTTPException
 
 try:
     from cachetools import TTLCache
@@ -66,6 +68,8 @@ except ImportError:  # pragma: no cover
 
 
 CN_TZ = timezone(timedelta(hours=8))
+logger = logging.getLogger(__name__)
+QUERY_TIMEOUT_SECONDS = 30.0
 _snapshot_cache = TTLCache(maxsize=200, ttl=90)
 _cache_lock = asyncio.Lock()
 _tx_cache = TTLCache(maxsize=500, ttl=60)
@@ -73,6 +77,19 @@ _tx_cache_lock = asyncio.Lock()
 _oplog_cache = TTLCache(maxsize=500, ttl=60)
 _oplog_cache_lock = asyncio.Lock()
 _CACHE_MISS = object()
+
+
+async def _run_timed_operation(name: str, operation: Awaitable[Any], *, context: Any) -> Any:
+    started_at = time.perf_counter()
+    try:
+        result = await asyncio.wait_for(operation, timeout=QUERY_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError as exc:
+        elapsed = time.perf_counter() - started_at
+        logger.error("%s timeout after %.3fs context=%s", name, elapsed, context)
+        raise HTTPException(status_code=503, detail="Backend query timeout") from exc
+    elapsed = time.perf_counter() - started_at
+    logger.info("%s completed in %.3fs context=%s", name, elapsed, context)
+    return result
 
 # CANONICAL SUCCESS FILTER: execution_result = 'SUCCEED' — change only here
 def _success_filter_sql(alias: str = "te") -> str:
@@ -349,7 +366,7 @@ async def _fetch_period_credits(
     return int(val or 0)
 
 
-async def _fetch_ops_trend(
+async def _actual_fetch_ops_trend(
     pool: Pool,
     tenant_id: int,
     cur_start: datetime,
@@ -469,6 +486,21 @@ async def _fetch_ops_trend(
     }
 
 
+async def _fetch_ops_trend(
+    pool: Pool,
+    tenant_id: int,
+    cur_start: datetime,
+    cur_end: datetime,
+    unit: str,
+) -> dict[str, list[Any]]:
+    context = (tenant_id, cur_start.isoformat(), cur_end.isoformat(), unit)
+    return await _run_timed_operation(
+        "_fetch_ops_trend",
+        _actual_fetch_ops_trend(pool, tenant_id, cur_start, cur_end, unit),
+        context=context,
+    )
+
+
 def _series_stats(values: list[int]) -> dict[str, int]:
     if not values:
         return {"avg": 0, "peak": 0}
@@ -505,7 +537,7 @@ CARD_DEFS = [
 ]
 
 
-async def aggregate_highlights(
+async def _actual_aggregate_highlights(
     pool: Pool,
     tenant_id: int,
     range_param: str,
@@ -552,6 +584,31 @@ async def aggregate_highlights(
     }
 
 
+async def aggregate_highlights(
+    pool: Pool,
+    tenant_id: int,
+    range_param: str,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    _window: Optional[tuple[datetime, datetime, datetime, datetime, str, str, int]] = None,
+    _prev_totals: Any = None,
+) -> dict[str, Any]:
+    context = (tenant_id, range_param, start, end)
+    return await _run_timed_operation(
+        "aggregate_highlights",
+        _actual_aggregate_highlights(
+            pool,
+            tenant_id,
+            range_param,
+            start,
+            end,
+            _window=_window,
+            _prev_totals=_prev_totals,
+        ),
+        context=context,
+    )
+
+
 # ────────────────────────────────────────────────────────────────
 # 2. /api/dashboard/achievements
 # ────────────────────────────────────────────────────────────────
@@ -567,7 +624,7 @@ ACHIEVEMENT_SOURCE_KEYS = {
 }
 
 
-async def aggregate_achievements(
+async def _actual_aggregate_achievements(
     pool: Pool,
     tenant_id: int,
     range_param: str,
@@ -622,11 +679,38 @@ async def aggregate_achievements(
     }
 
 
+async def aggregate_achievements(
+    pool: Pool,
+    tenant_id: int,
+    range_param: str,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    _window: Optional[tuple[datetime, datetime, datetime, datetime, str, str, int]] = None,
+    _cur_totals: Any = None,
+    _prev_totals: Any = None,
+) -> dict[str, Any]:
+    context = (tenant_id, range_param, start, end)
+    return await _run_timed_operation(
+        "aggregate_achievements",
+        _actual_aggregate_achievements(
+            pool,
+            tenant_id,
+            range_param,
+            start,
+            end,
+            _window=_window,
+            _cur_totals=_cur_totals,
+            _prev_totals=_prev_totals,
+        ),
+        context=context,
+    )
+
+
 # ────────────────────────────────────────────────────────────────
 # 3. /api/dashboard/aggregations
 # ────────────────────────────────────────────────────────────────
 
-async def aggregate_aggregations(
+async def _actual_aggregate_aggregations(
     pool: Pool,
     tenant_id: int,
     range_param: str,
@@ -988,11 +1072,34 @@ async def aggregate_aggregations(
     }
 
 
+async def aggregate_aggregations(
+    pool: Pool,
+    tenant_id: int,
+    range_param: str,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    _window: Optional[tuple[datetime, datetime, datetime, datetime, str, str, int]] = None,
+) -> dict[str, Any]:
+    context = (tenant_id, range_param, start, end)
+    return await _run_timed_operation(
+        "aggregate_aggregations",
+        _actual_aggregate_aggregations(
+            pool,
+            tenant_id,
+            range_param,
+            start,
+            end,
+            _window=_window,
+        ),
+        context=context,
+    )
+
+
 # ────────────────────────────────────────────────────────────────
 # 4. /api/dashboard/charts
 # ────────────────────────────────────────────────────────────────
 
-async def aggregate_charts(
+async def _actual_aggregate_charts(
     pool: Pool,
     tenant_id: int,
     range_param: str,
@@ -1176,6 +1283,37 @@ async def aggregate_charts(
     }
 
 
+async def aggregate_charts(
+    pool: Pool,
+    tenant_id: int,
+    range_param: str,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    _window: Optional[tuple[datetime, datetime, datetime, datetime, str, str, int]] = None,
+    _cur_totals: Any = None,
+    _cur_credits: Any = None,
+    _prev_totals: Any = None,
+    _prev_credits: Any = None,
+) -> dict[str, Any]:
+    context = (tenant_id, range_param, start, end)
+    return await _run_timed_operation(
+        "aggregate_charts",
+        _actual_aggregate_charts(
+            pool,
+            tenant_id,
+            range_param,
+            start,
+            end,
+            _window=_window,
+            _cur_totals=_cur_totals,
+            _cur_credits=_cur_credits,
+            _prev_totals=_prev_totals,
+            _prev_credits=_prev_credits,
+        ),
+        context=context,
+    )
+
+
 # ────────────────────────────────────────────────────────────────
 # 5. /api/dashboard/snapshot - 一次拉取首屏全部数据
 # ────────────────────────────────────────────────────────────────
@@ -1266,7 +1404,11 @@ async def aggregate_snapshot(
         if cached_snapshot is not _CACHE_MISS:
             return cached_snapshot
 
-        snapshot = await _actual_aggregate_snapshot(pool, tenant_id, range_param, start, end)
+        snapshot = await _run_timed_operation(
+            "aggregate_snapshot",
+            _actual_aggregate_snapshot(pool, tenant_id, range_param, start, end),
+            context=cache_key,
+        )
         _snapshot_cache[cache_key] = snapshot
         return snapshot
 
@@ -2159,16 +2301,20 @@ async def get_transactions(
         if cached_transactions is not _CACHE_MISS:
             return cached_transactions
 
-        transactions = await _actual_get_transactions(
-            pool,
-            page,
-            page_size,
-            tenant_id,
-            filters.get("member_id"),
-            filters.get("tx_type"),
-            filters.get("start_date"),
-            filters.get("end_date"),
-            filters.get("keyword"),
+        transactions = await _run_timed_operation(
+            "get_transactions",
+            _actual_get_transactions(
+                pool,
+                page,
+                page_size,
+                tenant_id,
+                filters.get("member_id"),
+                filters.get("tx_type"),
+                filters.get("start_date"),
+                filters.get("end_date"),
+                filters.get("keyword"),
+            ),
+            context=cache_key,
         )
         _tx_cache[cache_key] = transactions
         return transactions
@@ -2664,16 +2810,20 @@ async def get_audit_log(
         if cached_audit_log is not _CACHE_MISS:
             return cached_audit_log
 
-        audit_log = await _actual_get_audit_log(
-            pool,
-            tenant_id,
-            page,
-            page_size,
-            member_id,
-            action,
-            start_date,
-            end_date,
-            keyword,
+        audit_log = await _run_timed_operation(
+            "get_audit_log",
+            _actual_get_audit_log(
+                pool,
+                tenant_id,
+                page,
+                page_size,
+                member_id,
+                action,
+                start_date,
+                end_date,
+                keyword,
+            ),
+            context=cache_key,
         )
         _oplog_cache[cache_key] = audit_log
         return audit_log

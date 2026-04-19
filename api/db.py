@@ -50,8 +50,8 @@ async def init_pool() -> None:
     if _pool is not None:
         return
 
-    min_size = _env_int("DB_POOL_MIN_SIZE", 1, 1)
-    max_size = _env_int("DB_POOL_MAX_SIZE", 10, min_size)
+    min_size = _env_int("DB_POOL_MIN_SIZE", 5, 1)
+    max_size = _env_int("DB_POOL_MAX_SIZE", 25, min_size)
     command_timeout = _env_float("DB_COMMAND_TIMEOUT", 30.0, 1.0)
     statement_cache_size = _env_int("DB_STATEMENT_CACHE_SIZE", 100, 0)
 
