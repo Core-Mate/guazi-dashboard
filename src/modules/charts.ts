@@ -123,7 +123,9 @@ function ensureOpsRangeSelectionUi() {
     endLine.style.display = 'none';
   }
 
-  var summary = container.querySelector('.range-compare-summary') as HTMLElement | null;
+  var summary = (opsRangeSummary && opsRangeSummary.isConnected
+    ? opsRangeSummary
+    : document.querySelector('.range-compare-summary')) as HTMLElement | null;
   if (!summary) {
     summary = document.createElement('div');
     summary.className = 'range-compare-summary';
@@ -138,14 +140,16 @@ function ensureOpsRangeSelectionUi() {
     summary.appendChild(period);
     summary.appendChild(values);
     summary.appendChild(delta);
-    container.appendChild(summary);
+    document.body.appendChild(summary);
+  } else if (summary.parentElement !== document.body) {
+    document.body.appendChild(summary);
   }
 
   summary.style.position = 'fixed';
-  summary.style.top = '12px';
-  summary.style.right = '12px';
-  summary.style.left = 'auto';
-  summary.style.bottom = 'auto';
+  summary.style.top = '';
+  summary.style.right = '';
+  summary.style.left = '';
+  summary.style.bottom = '';
 
   opsRangeOverlay = overlay;
   opsRangeShade = overlay.querySelector('.select-shade') as HTMLElement | null;
@@ -289,6 +293,30 @@ function renderRangeCompareSummary(startIdx, endIdx) {
   opsRangeSummary.classList.add('visible');
 }
 
+function positionRangeCompareSummary(summaryEl: HTMLElement, canvas: HTMLCanvasElement, endPixelX: number) {
+  const canvasRect = canvas.getBoundingClientRect()
+  const summaryWidth = summaryEl.offsetWidth || 240
+  const summaryHeight = summaryEl.offsetHeight || 100
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  const margin = 12
+
+  let left = canvasRect.left + endPixelX - summaryWidth / 2
+  left = Math.max(margin, Math.min(left, vw - summaryWidth - margin))
+
+  let top = canvasRect.top - summaryHeight - 8
+  if (top < margin) {
+    top = canvasRect.bottom + 8
+    if (top + summaryHeight > vh - margin) {
+      top = canvasRect.top + margin
+    }
+  }
+
+  summaryEl.style.left = left + 'px'
+  summaryEl.style.top = top + 'px'
+  summaryEl.style.right = ''
+}
+
 function setOpsRangeTooltipEnabled(chart: any, enabled: boolean) {
   if (!chart || !chart.options) return;
   var options = chart.options as any;
@@ -354,6 +382,7 @@ function bindOpsRangeSelection(chart: any) {
     var startIdx = Math.min(opsRangeStartIdx, opsRangeEndIdx);
     var endIdx = Math.max(opsRangeStartIdx, opsRangeEndIdx);
     renderRangeCompareSummary(startIdx, endIdx);
+    if (opsRangeSummary) positionRangeCompareSummary(opsRangeSummary, canvas, event.offsetX);
   };
 
   var onMouseUp = function(event: MouseEvent) {
