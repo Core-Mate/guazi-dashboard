@@ -2,9 +2,23 @@ import { expect, type Page, type TestInfo } from '@playwright/test'
 
 export const FRONTEND_BASE_URL = process.env.PLAYWRIGHT_FRONTEND_BASE_URL ?? 'http://localhost:8402'
 export const API_BASE_URL = process.env.PLAYWRIGHT_API_BASE_URL ?? 'http://localhost:8403'
-export const API_KEY = process.env.E2E_API_KEY ?? 'dev-key-guazi-2026'
-export const TENANT_ID = process.env.E2E_TENANT_ID ?? '1'
+export const E2E_LOGIN_PHONE = process.env.E2E_LOGIN_PHONE ?? '13800138001'
+export const E2E_LOGIN_CODE = process.env.E2E_LOGIN_CODE ?? '123456'
 const DASHBOARD_RANGE_TIMEOUT_MS = 15_000
+
+interface AuthUser {
+  id: number
+  name: string
+  phoneNumber: string
+  role: string
+  tenant_id: number
+  tenant_name: string
+}
+
+interface AuthSession {
+  token: string
+  user: AuthUser
+}
 
 type ServiceName = 'frontend' | 'backend'
 
@@ -12,6 +26,8 @@ export interface ServiceAvailability {
   ready: boolean
   reason: string
 }
+
+let authSessionPromise: Promise<AuthSession> | null = null
 
 function withTimeout(timeoutMs: number) {
   const controller = new AbortController()
@@ -85,22 +101,60 @@ export async function checkServices(required: ServiceName[]): Promise<ServiceAva
   }
 }
 
-export function authHeaders(): Record<string, string> {
+export async function authHeaders(): Promise<Record<string, string>> {
+  const session = await getAuthSession()
   return {
-    'Accept': 'application/json',
-    'X-API-Key': API_KEY,
+    Accept: 'application/json',
+    Authorization: `Bearer ${session.token}`,
   }
 }
 
+export async function getAuthSession(): Promise<AuthSession> {
+  if (authSessionPromise) {
+    return authSessionPromise
+  }
+
+  authSessionPromise = (async () => {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/auth/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        phone: E2E_LOGIN_PHONE,
+        code: E2E_LOGIN_CODE,
+      }),
+    })
+
+    const body = await response.json().catch(() => null)
+    if (!response.ok || !body?.token || !body?.user) {
+      throw new Error(`mock login failed: ${response.status} ${JSON.stringify(body)}`)
+    }
+
+    return {
+      token: String(body.token),
+      user: body.user as AuthUser,
+    }
+  })()
+
+  return authSessionPromise
+}
+
 async function seedDashboardAuth(page: Page): Promise<void> {
+  const session = await getAuthSession()
   await page.addInitScript(
-    ({ apiKey, tenantId }) => {
+    ({ token, user }) => {
       try {
-        localStorage.setItem('dashboardApiKey', apiKey)
-        localStorage.setItem('dashboardTenantId', tenantId)
+        localStorage.setItem('authToken', token)
+        localStorage.setItem('currentUser', JSON.stringify(user))
+        localStorage.removeItem('dashboardApiKey')
+        localStorage.removeItem('dashboardTenantId')
+        localStorage.removeItem('tenant_id')
+        localStorage.removeItem('tenantId')
       } catch {}
     },
-    { apiKey: API_KEY, tenantId: TENANT_ID },
+    { token: session.token, user: session.user },
   )
 }
 

@@ -3,6 +3,7 @@ import {
   fetchWallet as apiFetchWallet,
   fetchAccounts as apiFetchAccounts,
 } from '../data/api'
+import { getAuthHeaders, getCurrentUser } from './auth'
 import { renderHighlightCards } from './charts'
 import { renderMembers } from './members'
 import { paginationState, renderTransactions } from './records'
@@ -291,35 +292,14 @@ export function showDashboardError(msg: string) {
   if (textEl) textEl.textContent = msg;
 }
 
-function getApiKey(): string {
-  if (import.meta.env.DEV) {
-    return localStorage.getItem('dashboardApiKey')
-      || import.meta.env.VITE_API_KEY
-      || ''
-  }
-  return ''
-}
-
 function getDashboardApiHeaders() {
-  var headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  var apiKey = getApiKey()
-  if (apiKey) headers['X-API-Key'] = apiKey
-  return headers
+  return Object.assign({ 'Content-Type': 'application/json' }, getAuthHeaders())
 }
 
 export function getDashboardTenantId() {
-  var keys = ['dashboardTenantId', 'tenant_id', 'tenantId']
-  for (var i = 0; i < keys.length; i++) {
-    try {
-      var localValue = localStorage.getItem(keys[i])
-      if (localValue) return localValue
-    } catch {}
-    try {
-      var sessionValue = sessionStorage.getItem(keys[i])
-      if (sessionValue) return sessionValue
-    } catch {}
-  }
-  return ''
+  var user = getCurrentUser()
+  if (!user || !user.tenant_id) return ''
+  return String(user.tenant_id)
 }
 
 function resolveTenantId(tenantId?: string) {
@@ -763,11 +743,16 @@ export function applyMembersData(data: any[], preserveSelection: boolean = true)
   var countEl = document.getElementById('statMemberCount');
   if (countEl) countEl.textContent = membersData.length + '人';
 
+  var currentUser = getCurrentUser();
   var admin = membersData.find(function(m) { return m.role === 'admin'; });
   var nameEl = document.getElementById('sidebarUserName');
   var avatarEl = document.getElementById('sidebarAvatar');
   var roleEl = document.getElementById('sidebarUserRole');
-  if (admin) {
+  if (currentUser) {
+    if (nameEl) nameEl.textContent = currentUser.name || '未命名用户';
+    if (avatarEl) avatarEl.textContent = (currentUser.name || '用').charAt(0);
+    if (roleEl) roleEl.textContent = currentUser.role === 'admin' ? '管理员' : '成员';
+  } else if (admin) {
     if (nameEl) nameEl.textContent = admin.name;
     if (avatarEl) avatarEl.textContent = admin.name.charAt(0);
     if (roleEl) roleEl.textContent = '管理员';

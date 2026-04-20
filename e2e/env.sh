@@ -4,13 +4,15 @@ case "$TEST_ENV" in
   local)
     export E2E_API_BASE="${E2E_API_BASE:-http://localhost:8403}"
     export E2E_FRONTEND_URL="${E2E_FRONTEND_URL:-http://localhost:8402}"
-    export E2E_API_KEY="${E2E_API_KEY:-dev-key-guazi-2026}"
+    export E2E_LOGIN_PHONE="${E2E_LOGIN_PHONE:-13800138001}"
+    export E2E_LOGIN_CODE="${E2E_LOGIN_CODE:-123456}"
     export E2E_TENANT_ID="${E2E_TENANT_ID:-1}"
     ;;
   staging|prod)
     : "${E2E_API_BASE:?must set E2E_API_BASE for $TEST_ENV}"
     : "${E2E_FRONTEND_URL:?must set E2E_FRONTEND_URL for $TEST_ENV}"
-    : "${E2E_API_KEY:?must set E2E_API_KEY for $TEST_ENV}"
+    : "${E2E_LOGIN_PHONE:?must set E2E_LOGIN_PHONE for $TEST_ENV}"
+    : "${E2E_LOGIN_CODE:?must set E2E_LOGIN_CODE for $TEST_ENV}"
     : "${E2E_TENANT_ID:?must set E2E_TENANT_ID for $TEST_ENV}"
     ;;
   *)

@@ -21,7 +21,29 @@ done
 INFRA_ERROR=0
 TIMEOUT="${E2E_API_TIMEOUT:-15}"
 BASE_URL="${E2E_API_BASE%/}"
-AUTH_HEADER="X-API-Key: $E2E_API_KEY"
+AUTH_PHONE="${E2E_LOGIN_PHONE}"
+AUTH_CODE="${E2E_LOGIN_CODE}"
+
+AUTH_BODY="$(mktemp)"
+AUTH_STATUS="$(
+  curl -sS -m "$TIMEOUT" \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json" \
+    -o "$AUTH_BODY" \
+    -w "%{http_code}" \
+    -X POST \
+    --data "{\"phone\":\"$AUTH_PHONE\",\"code\":\"$AUTH_CODE\"}" \
+    "$BASE_URL/api/auth/login"
+)"
+AUTH_TOKEN="$(jq -r '.token // empty' "$AUTH_BODY" 2>/dev/null || true)"
+AUTH_USER_TENANT_ID="$(jq -r '.user.tenant_id // empty' "$AUTH_BODY" 2>/dev/null || true)"
+if [[ "$AUTH_STATUS" != "200" || -z "$AUTH_TOKEN" ]]; then
+  printf '[e2e] mock login failed: status=%s body=%s\n' "$AUTH_STATUS" "$(cat "$AUTH_BODY")" >&2
+  rm -f "$AUTH_BODY"
+  exit 1
+fi
+rm -f "$AUTH_BODY"
+AUTH_HEADER="Authorization: Bearer $AUTH_TOKEN"
 
 escape_md() {
   printf '%s' "$1" | sed 's/|/\\|/g'
@@ -103,7 +125,7 @@ cleanup_member() {
   printf -- '- Run ID: `%s`\n' "$RUN_ID"
   printf -- '- Generated: `%s`\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
   printf -- '- API Base: `%s`\n' "$BASE_URL"
-  printf -- '- Tenant: `%s`\n\n' "$E2E_TENANT_ID"
+  printf -- '- Tenant: `%s`\n\n' "${AUTH_USER_TENANT_ID:-$E2E_TENANT_ID}"
   printf '| Check | Result | Detail |\n'
   printf '| --- | --- | --- |\n'
 } >"$REPORT"

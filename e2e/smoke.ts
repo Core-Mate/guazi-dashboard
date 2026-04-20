@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -22,7 +21,7 @@ const DEFAULT_VIEWPORT = { width: 1440, height: 960 };
 const runId = new Date().toISOString().replace(/[:.]/g, "-");
 const screenshotDir = join("dashboard", "e2e", "screenshots", runId);
 const reportPath = join("dashboard", "e2e", "reports", `${runId}.md`);
-let dashboardApiKeyCache: string | null | undefined;
+let authSessionPromise: Promise<{ token: string; user: Record<string, unknown> }> | null = null;
 
 mkdirSync(screenshotDir, { recursive: true });
 mkdirSync(dirname(reportPath), { recursive: true });
@@ -49,45 +48,52 @@ async function resetViewport(width = DEFAULT_VIEWPORT.width, height = DEFAULT_VI
   await wait(250);
 }
 
-function resolveDashboardApiKey(): string | null {
-  if (dashboardApiKeyCache !== undefined) {
-    return dashboardApiKeyCache;
+async function getAuthSession(): Promise<{ token: string; user: Record<string, unknown> }> {
+  if (authSessionPromise) {
+    return authSessionPromise;
   }
 
-  if (typeof process.env.API_KEY === "string" && process.env.API_KEY.trim()) {
-    dashboardApiKeyCache = process.env.API_KEY.trim();
-    return dashboardApiKeyCache;
-  }
-
-  try {
-    const output = execFileSync(process.env.SHELL || "zsh", [
-      "-lc",
-      "ps eww -p $(lsof -tiTCP:8403 -sTCP:LISTEN | head -1)",
-    ], {
-      encoding: "utf8",
+  authSessionPromise = (async () => {
+    const apiBase = process.env.E2E_API_BASE?.trim() || "http://localhost:8403";
+    const phone = process.env.E2E_LOGIN_PHONE?.trim() || "13800138001";
+    const code = process.env.E2E_LOGIN_CODE?.trim() || "123456";
+    const response = await fetch(`${apiBase}/api/auth/login`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ phone, code }),
     });
-    const match = output.match(/(?:^|\s)API_KEY=([^ ]+)/);
-    dashboardApiKeyCache = match ? match[1].trim() : null;
-  } catch {
-    dashboardApiKeyCache = null;
-  }
+    const body = await response.json().catch(() => null);
+    if (!response.ok || !body?.token || !body?.user) {
+      throw new Error(`mock login failed: ${response.status} ${JSON.stringify(body)}`);
+    }
+    return {
+      token: String(body.token),
+      user: body.user as Record<string, unknown>,
+    };
+  })();
 
-  return dashboardApiKeyCache;
+  return authSessionPromise;
 }
 
 async function seedDashboardAuth(): Promise<boolean> {
-  const apiKey = resolveDashboardApiKey();
-  if (!apiKey) {
-    return false;
-  }
+  const session = await getAuthSession();
+  const userJson = JSON.stringify(session.user);
 
   const result = await evalJson<{ changed: boolean }>(`
     (() => {
       try {
-        const key = ${JSON.stringify(apiKey)};
-        const changed = localStorage.getItem('dashboardApiKey') !== key || localStorage.getItem('dashboardTenantId') !== '1';
-        localStorage.setItem('dashboardApiKey', key);
-        localStorage.setItem('dashboardTenantId', '1');
+        const token = ${JSON.stringify(session.token)};
+        const user = ${JSON.stringify(userJson)};
+        const changed = localStorage.getItem('authToken') !== token || localStorage.getItem('currentUser') !== user;
+        localStorage.setItem('authToken', token);
+        localStorage.setItem('currentUser', user);
+        localStorage.removeItem('dashboardApiKey');
+        localStorage.removeItem('dashboardTenantId');
+        localStorage.removeItem('tenant_id');
+        localStorage.removeItem('tenantId');
         return { changed };
       } catch {
         return { changed: false };

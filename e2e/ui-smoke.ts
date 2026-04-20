@@ -43,6 +43,13 @@ interface TestResult {
   durationMs: number;
 }
 
+interface AuthSession {
+  token: string;
+  user: Record<string, unknown>;
+}
+
+let authSessionPromise: Promise<AuthSession> | null = null;
+
 function formatError(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -81,20 +88,51 @@ async function resetViewport(width = DEFAULT_VIEWPORT.width, height = DEFAULT_VI
   await wait(250);
 }
 
-async function seedDashboardAuth(): Promise<boolean> {
-  const apiKey = process.env.E2E_API_KEY?.trim();
-  const tenantId = process.env.E2E_TENANT_ID?.trim() || "1";
-  if (!apiKey) {
-    return false;
+async function getAuthSession(): Promise<AuthSession> {
+  if (authSessionPromise) {
+    return authSessionPromise;
   }
+
+  authSessionPromise = (async () => {
+    const apiBase = process.env.E2E_API_BASE?.trim() || "http://localhost:8403";
+    const phone = process.env.E2E_LOGIN_PHONE?.trim() || "13800138001";
+    const code = process.env.E2E_LOGIN_CODE?.trim() || "123456";
+    const response = await fetch(`${apiBase}/api/auth/login`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ phone, code }),
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok || !body?.token || !body?.user) {
+      throw new Error(`mock login failed: ${response.status} ${JSON.stringify(body)}`);
+    }
+    return {
+      token: String(body.token),
+      user: body.user as Record<string, unknown>,
+    };
+  })();
+
+  return authSessionPromise;
+}
+
+async function seedDashboardAuth(): Promise<boolean> {
+  const session = await getAuthSession();
+  const userJson = JSON.stringify(session.user);
 
   return evalJson<boolean>(`
     (() => {
       const changed =
-        localStorage.getItem("dashboardApiKey") !== ${JSON.stringify(apiKey)} ||
-        localStorage.getItem("dashboardTenantId") !== ${JSON.stringify(tenantId)};
-      localStorage.setItem("dashboardApiKey", ${JSON.stringify(apiKey)});
-      localStorage.setItem("dashboardTenantId", ${JSON.stringify(tenantId)});
+        localStorage.getItem("authToken") !== ${JSON.stringify(session.token)} ||
+        localStorage.getItem("currentUser") !== ${JSON.stringify(userJson)};
+      localStorage.setItem("authToken", ${JSON.stringify(session.token)});
+      localStorage.setItem("currentUser", ${JSON.stringify(userJson)});
+      localStorage.removeItem("dashboardApiKey");
+      localStorage.removeItem("dashboardTenantId");
+      localStorage.removeItem("tenant_id");
+      localStorage.removeItem("tenantId");
       return changed;
     })()
   `);

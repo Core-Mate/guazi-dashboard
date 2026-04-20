@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-import { API_BASE_URL, TENANT_ID, authHeaders, checkServices } from './helpers'
+import { API_BASE_URL, authHeaders, checkServices } from './helpers'
 
 const SNAPSHOT_KEYS = [
   'highlights',
@@ -44,8 +44,8 @@ test('GET /health returns 200 and pool JSON', async ({ request }) => {
 test('GET /api/dashboard/snapshot returns the dashboard payload shape', async ({ request }) => {
   test.skip(!availability.ready, availability.reason)
 
-  const response = await request.get(`${API_BASE_URL}/api/dashboard/snapshot?range=7d&tenant_id=${TENANT_ID}`, {
-    headers: authHeaders(),
+  const response = await request.get(`${API_BASE_URL}/api/dashboard/snapshot?range=7d`, {
+    headers: await authHeaders(),
   })
 
   expect(response.status()).toBe(200)
@@ -59,8 +59,8 @@ test('GET /api/dashboard/snapshot returns the dashboard payload shape', async ({
 test('GET /api/members returns an array for the dev tenant', async ({ request }) => {
   test.skip(!availability.ready, availability.reason)
 
-  const response = await request.get(`${API_BASE_URL}/api/members?tenant_id=${TENANT_ID}`, {
-    headers: authHeaders(),
+  const response = await request.get(`${API_BASE_URL}/api/members`, {
+    headers: await authHeaders(),
   })
 
   expect(response.status()).toBe(200)
@@ -73,12 +73,17 @@ test('GET /api/members returns an array for the dev tenant', async ({ request })
   }
 })
 
-test('GET /api/members without X-API-Key returns 401', async ({ request }) => {
+test('GET /api/members with X-API-Key but no Bearer returns 401', async ({ request }) => {
   test.skip(!availability.ready, availability.reason)
 
-  const response = await request.get(`${API_BASE_URL}/api/members`)
+  const response = await request.get(`${API_BASE_URL}/api/members`, {
+    headers: {
+      Accept: 'application/json',
+      'X-API-Key': 'dev-key-guazi-2026',
+    },
+  })
   expect(response.status()).toBe(401)
 
   const body = await response.json()
-  expect(String(body.detail ?? body.error ?? '')).toContain('X-API-Key')
+  expect(String(body.error ?? body.detail ?? '')).toContain('Unauthorized')
 })

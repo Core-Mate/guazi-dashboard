@@ -9,6 +9,7 @@ import os
 import sys
 import time
 from typing import Any, Awaitable, Callable, Optional
+from uuid import uuid4
 
 import asyncpg
 import uvicorn
@@ -153,9 +154,8 @@ _WARMUP_TICK_TIMEOUT_SECONDS = 120.0
 def tenant_key_fn(request: Request) -> str:
     tenant_id = getattr(request.state, "tenant_id", None)
     if not tenant_id:
-        api_key = request.headers.get("X-API-Key", "").strip()
-        if api_key:
-            tenant_id = auth.resolve_tenant_id(api_key)
+        bearer_token = _extract_bearer_token(request.headers.get("Authorization", "").strip())
+        tenant_id = _resolve_mock_bearer_tenant_id(bearer_token)
     if tenant_id:
         return f"tenant:{tenant_id}"
     return get_remote_address(request)
@@ -178,10 +178,6 @@ def _get_warmup_tenant_ids() -> list[int]:
                 logger.warning("Skipping invalid DASHBOARD_WARMUP_TENANT_IDS entry: %s", part)
         if tenant_ids:
             return sorted(set(tenant_ids))
-
-    configured_tenants = sorted(set(auth.API_KEYS.values()))
-    if configured_tenants:
-        return configured_tenants
 
     fallback_tenant = os.getenv("TENANT_ID", "1").strip()
     try:
@@ -336,22 +332,10 @@ async def startup_self_check() -> None:
         raise RuntimeError(f"DB startup check failed: {exc}") from exc
 
     tenant_env = os.getenv("TENANT_ID", "").strip()
-    keys_env = os.getenv("DASHBOARD_API_KEYS", "").strip()
-    env_flag = os.getenv("DASHBOARD_ENV", "").strip().lower()
-    is_prod = env_flag in ("prod", "production")
-    if not keys_env and tenant_env in ("", "1"):
-        msg = "DASHBOARD_API_KEYS empty and TENANT_ID is default 1 — using dev defaults"
-        if is_prod:
-            raise RuntimeError(
-                "Must set DASHBOARD_API_KEYS (key:tenant,...) or TENANT_ID to a real tenant id in production"
-            )
-        logger.warning(msg)
-
     logger.info(
         "Dashboard startup self-check passed",
         extra={
             "extra": {
-                "dashboard_api_keys_present": bool(keys_env),
                 "tenant_id_configured": bool(tenant_env and tenant_env != "1"),
             }
         },
@@ -377,7 +361,7 @@ async def lifespan(app: FastAPI):
         await db.close_pool()
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(lifespan=lifespan, dependencies=[Depends(auth.enforce_dashboard_rbac)])
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(
@@ -392,13 +376,32 @@ app.add_middleware(
 @app.middleware("http")
 async def bind_tenant_context(request: Request, call_next):
     request.state.tenant_id = None
-    api_key = request.headers.get("X-API-Key", "").strip()
-    if api_key:
-        request.state.tenant_id = auth.resolve_tenant_id(api_key)
+    request.state.current_user = None
+    bearer_token = _extract_bearer_token(request.headers.get("Authorization", "").strip())
+    user = auth.resolve_bearer_user(bearer_token)
+    if not user:
+        user_id = _extract_mock_bearer_user_id(bearer_token)
+        if user_id is not None:
+            try:
+                pool = await db.get_pool()
+                user = await _fetch_auth_user_by_id(pool, user_id)
+            except asyncpg.PostgresError:
+                logger.exception("Failed to hydrate bearer user from database")
+                user = None
+            if user:
+                auth.store_mock_auth_session(bearer_token, user)
+    if user:
+        request.state.current_user = dict(user)
+        request.state.tenant_id = int(user.get("tenant_id") or 1)
     return await call_next(request)
 
 
 app.add_middleware(SlowAPIMiddleware)
+
+
+@app.exception_handler(auth.AuthError)
+async def handle_auth_error(_: Request, exc: auth.AuthError):
+    return JSONResponse(status_code=exc.status_code, content={"error": exc.error})
 
 
 @app.get("/health")
@@ -432,9 +435,230 @@ async def health_check(pool: Pool = Depends(db.get_pool)):
 async def readiness_check():
     return {"status": "ok"}
 
-_ALLOWED_MEMBER_ROLES = {"admin", "member", "user"}
+_ALLOWED_MEMBER_ROLES = {"admin", "enterprise_admin", "member", "user"}
 _MAX_MEMBER_TEXT_LENGTH = 128
 _MAX_REMARK_LENGTH = 500
+# TODO: 当前开发态 DB 直查与 mock session 仅用于联调，上线前替换为 Better Auth。
+_AUTH_USER_SELECT = """
+    SELECT
+        u.id,
+        u.name,
+        u."phoneNumber",
+        u.role,
+        u.tenant_id,
+        t.tenant_name
+    FROM users u
+    LEFT JOIN tenants t
+      ON t.id = u.tenant_id
+    WHERE {predicate}
+      AND u.is_deleted = false
+      AND u.is_active = true
+      AND COALESCE(u.banned, false) = false
+"""
+
+
+class SendOtpRequest(BaseModel):
+    phone: Optional[str] = None
+    phoneNumber: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    phone: Optional[str] = None
+    phoneNumber: Optional[str] = None
+    code: Optional[str] = None
+    verifyCode: Optional[str] = None
+
+
+def _extract_bearer_token(authorization: Optional[str]) -> str:
+    if not authorization:
+        return ""
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer":
+        return ""
+    return token.strip()
+
+
+def _normalize_phone_number(phone: str) -> str:
+    cleaned = (phone or "").strip()
+    if not cleaned:
+        raise ValueError("phone is required")
+    if len(cleaned) > 32:
+        raise ValueError("phone is too long")
+    return cleaned
+
+
+def _resolve_request_phone_number(*candidates: Optional[str]) -> str:
+    for candidate in candidates:
+        if candidate and candidate.strip():
+            return _normalize_phone_number(candidate)
+    return _normalize_phone_number("")
+
+
+def _resolve_request_verify_code(*candidates: Optional[str]) -> str:
+    for candidate in candidates:
+        if candidate and candidate.strip():
+            return candidate.strip()
+    return ""
+
+
+def _serialize_auth_user(row: asyncpg.Record) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "phoneNumber": row["phoneNumber"],
+        "role": row["role"],
+        "tenant_id": row["tenant_id"],
+        "tenant_name": row["tenant_name"],
+    }
+
+
+async def _fetch_auth_user_by_phone(pool: Pool, phone_number: str) -> Optional[dict[str, Any]]:
+    row = await pool.fetchrow(
+        _AUTH_USER_SELECT.format(predicate='u."phoneNumber" = $1'),
+        phone_number,
+    )
+    if row is None:
+        return None
+    return _serialize_auth_user(row)
+
+
+async def _fetch_auth_user_by_id(pool: Pool, user_id: int) -> Optional[dict[str, Any]]:
+    row = await pool.fetchrow(
+        _AUTH_USER_SELECT.format(predicate="u.id = $1"),
+        user_id,
+    )
+    if row is None:
+        return None
+    return _serialize_auth_user(row)
+
+
+async def _fetch_auth_login_candidate_row(pool: Pool, phone_number: str) -> Optional[asyncpg.Record]:
+    return await pool.fetchrow(
+        """
+        SELECT
+            u.id,
+            u.name,
+            u."phoneNumber",
+            u.role,
+            u.tenant_id,
+            u.is_active,
+            COALESCE(u.banned, false) AS banned,
+            u.is_deleted,
+            t.tenant_name
+        FROM users u
+        LEFT JOIN tenants t
+          ON t.id = u.tenant_id
+        WHERE u."phoneNumber" = $1
+        ORDER BY
+            CASE WHEN u.is_deleted THEN 1 ELSE 0 END,
+            CASE WHEN u.is_active THEN 0 ELSE 1 END,
+            CASE WHEN COALESCE(u.banned, false) THEN 1 ELSE 0 END,
+            u.id DESC
+        LIMIT 1
+        """,
+        phone_number,
+    )
+
+
+def _extract_mock_bearer_user_id(token: str) -> Optional[int]:
+    if not token.startswith(auth.MOCK_BEARER_PREFIX):
+        return None
+    prefix, user_id_part, session_suffix = token.split("-", 2) if token.count("-") >= 2 else ("", "", "")
+    if prefix != "mock" or not user_id_part or not session_suffix:
+        return None
+    try:
+        return int(user_id_part)
+    except ValueError:
+        return None
+
+
+def _resolve_mock_bearer_tenant_id(token: str) -> Optional[int]:
+    user = auth.resolve_bearer_user(token)
+    if not user:
+        return None
+    return int(user.get("tenant_id") or 1)
+
+
+@app.post("/api/auth/send-otp")
+async def api_auth_send_otp(body: SendOtpRequest):
+    try:
+        phone_number = _resolve_request_phone_number(body.phone, body.phoneNumber)
+    except ValueError as exc:
+        return value_error_response(exc)
+
+    # TODO: 接入阿里云 SMS；开发环境固定验证码仅用于联调，上线前替换为 Better Auth。
+    return {
+        "success": True,
+        "phone": phone_number,
+        "devCode": "123456",
+    }
+
+
+@app.post("/api/auth/login")
+async def api_auth_login(body: LoginRequest, pool: Pool = Depends(db.get_pool)):
+    try:
+        phone_number = _resolve_request_phone_number(body.phone, body.phoneNumber)
+    except ValueError as exc:
+        return value_error_response(exc)
+
+    if _resolve_request_verify_code(body.code, body.verifyCode) != "123456":
+        return JSONResponse(status_code=401, content={"error": "验证码错误"})
+
+    try:
+        candidate_row = await _fetch_auth_login_candidate_row(pool, phone_number)
+    except asyncpg.PostgresError as exc:
+        return postgres_error_response(exc)
+
+    if candidate_row is None:
+        return JSONResponse(status_code=404, content={"error": "未注册"})
+
+    if candidate_row["is_deleted"] or (not candidate_row["is_active"]) or candidate_row["banned"]:
+        return JSONResponse(status_code=403, content={"error": "无后台访问权限"})
+
+    user = _serialize_auth_user(candidate_row)
+    if user["role"] == "user":
+        return JSONResponse(status_code=403, content={"error": "无后台访问权限"})
+    if user["role"] not in {"admin", "enterprise_admin", "member"}:
+        return JSONResponse(status_code=403, content={"error": "无后台访问权限"})
+
+    token = f"{auth.MOCK_BEARER_PREFIX}{user['id']}-{uuid4()}"
+    auth.store_mock_auth_session(token, user)
+    # TODO: 当前开发态验证码校验与 mock token 仅用于联调，上线前替换为 Better Auth。
+    return {"token": token, "user": user}
+
+
+@app.post("/api/auth/logout")
+async def api_auth_logout(
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    _: Optional[dict[str, Any]] = Depends(auth.require_authenticated_user),
+):
+    token = _extract_bearer_token(authorization)
+    auth.delete_mock_auth_session(token)
+    return {"success": True}
+
+
+@app.get("/api/auth/me")
+async def api_auth_me(
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    _: Optional[dict[str, Any]] = Depends(auth.require_authenticated_user),
+    pool: Pool = Depends(db.get_pool),
+):
+    token = _extract_bearer_token(authorization)
+    user_id = _extract_mock_bearer_user_id(token)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="登录态无效")
+
+    try:
+        user = await _fetch_auth_user_by_id(pool, user_id)
+    except asyncpg.PostgresError as exc:
+        return postgres_error_response(exc)
+
+    if user is None:
+        raise HTTPException(status_code=404, detail="该用户不存在或已失效")
+
+    auth.store_mock_auth_session(token, user)
+    # TODO: 当前开发态 mock bearer 仅用于联调，上线前替换为 Better Auth。
+    return {"user": user}
 
 
 def postgres_error_response(exc: asyncpg.PostgresError) -> JSONResponse:
@@ -476,7 +700,7 @@ def _normalize_member_role(value: Optional[str]) -> Optional[str]:
     if not cleaned:
         raise ValueError("role must not be empty")
     if cleaned not in _ALLOWED_MEMBER_ROLES:
-        raise ValueError("role must be one of: admin, member, user")
+        raise ValueError("role must be one of: admin, enterprise_admin, member, user")
     return cleaned
 
 

@@ -1,20 +1,14 @@
+import { getAuthHeaders } from '../modules/auth'
+
 var API_BASE = ((import.meta as any).env && (import.meta as any).env.VITE_API_BASE) || '/api';
 var API_REQUEST_TIMEOUT_MS = 8000;
 var API_PROBE_TIMEOUT_MS = 3000;
 
-function getApiKey(): string {
-  if (import.meta.env.DEV) {
-    return localStorage.getItem('dashboardApiKey')
-      || import.meta.env.VITE_API_KEY
-      || '';
-  }
-  return '';
-}
-
 function buildApiHeaders(extraHeaders?: Record<string, string>): Record<string, string> {
-  var headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  var apiKey = getApiKey();
-  if (apiKey) headers['X-API-Key'] = apiKey;
+  var headers: Record<string, string> = Object.assign(
+    { 'Content-Type': 'application/json' },
+    getAuthHeaders(),
+  );
   if (extraHeaders) {
     Object.assign(headers, extraHeaders);
   }
