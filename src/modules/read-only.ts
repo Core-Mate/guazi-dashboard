@@ -20,7 +20,7 @@ function pruneMemberWriteEntrances() {
 
 export function isMemberReadOnly(user?: AuthUser | null): boolean {
   var target = getResolvedUser(user)
-  return !!target && target.role === 'member'
+  return !!target && (target.role === 'member' || target.role === 'user')
 }
 
 export function syncMemberReadOnlyUI(user?: AuthUser | null) {

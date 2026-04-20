@@ -23,7 +23,7 @@ import { showLoader, hideLoader } from './modules/loader'
 import { bindRidgelineToggle, refreshRidgeline } from './modules/ridgeline-bind'
 import { pTag, initFilters, renderTaskTable, animateAllNumbers, getToday, getStatNum, setStatNum, prependTransaction, formatCompareText } from './modules/utils'
 import { applyMembersData, applyWalletData, fetchDashboardData, applyBetaOverlays, clearDashboardSnapshotCache, normalizeTransactions, normalizeAuditLog, showDashboardError } from './modules/api-integration'
-import { getAuthToken, getCurrentUser, login as loginWithOtp, logout as logoutFromDashboard, sendOtp, verifyToken, type AuthUser } from './modules/auth'
+import { getCurrentUser, login as loginWithOtp, logout as logoutFromDashboard, sendOtp, verifyToken, type AuthUser } from './modules/auth'
 import { syncMemberReadOnlyUI } from './modules/read-only'
 import { PLATFORM_BREAKDOWN } from './data/platforms'
 import { INTERACTION_BREAKDOWN } from './data/charts'
@@ -62,8 +62,8 @@ function setLoginError(message: string) {
 function formatUserRole(user: AuthUser | null) {
   if (!user) return ''
   if (user.role === 'admin') return '管理员'
-  if (user.role === 'enterprise_admin') return '平台管理员'
-  if (user.role === 'member') return '只读成员'
+  if (user.role === 'enterprise_admin') return '企业管理员'
+  if (user.role === 'member' || user.role === 'user') return '只读成员'
   return user.role || ''
 }
 
@@ -579,11 +579,6 @@ document.addEventListener('DOMContentLoaded', async function() {
     if (el && !el.classList.contains('hidden')) el.classList.add('hidden')
   }, 4000)
   try {
-    if (!getAuthToken()) {
-      showLoginOverlay()
-      return
-    }
-
     var verified = await verifyToken()
     if (!verified) {
       showLoginOverlay('登录状态已失效，请重新登录')

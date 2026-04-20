@@ -1266,6 +1266,9 @@ function bindDonutCenterRestore(canvas: HTMLElement | null) {
 export function createDonutChart(range) {
   const data = Array.isArray(PLATFORM_BREAKDOWN[range]) ? PLATFORM_BREAKDOWN[range] : [];
   const total = data.reduce((a, d) => a + d.value, 0);
+  var getName = function(item, index) {
+    return String(item && (item.name || item.label || item.key) || ('项目' + String(index + 1)));
+  };
   var totalEl = document.getElementById('donutTotal');
   if (totalEl) totalEl.textContent = total;
   var canvas = document.getElementById('donutChart') as HTMLCanvasElement | null;
@@ -1275,7 +1278,7 @@ export function createDonutChart(range) {
   donutChartInstance = new Chart(canvas, {
     type: 'doughnut',
     data: {
-      labels: data.map(d => d.name),
+      labels: data.map((d, index) => getName(d, index)),
       datasets: [{ data: data.map(d => d.value), backgroundColor: data.map(d => d.color), borderWidth: 2, borderColor: '#fff', hoverOffset: 6 }]
     },
     options: {
@@ -1292,15 +1295,18 @@ export function createDonutChart(range) {
   });
   var legend = document.getElementById('donutLegend');
   if (legend) {
-    legend.innerHTML = data.map(d =>
-      '<div class="donut-legend-item"><span class="donut-legend-dot" style="background:'+d.color+'"></span>'+d.name+'<span class="donut-legend-val">'+d.value+'</div>'
-    ).join('');
+    legend.innerHTML = data.map(function(d, index) {
+      return '<div class="donut-legend-item"><span class="donut-legend-dot" style="background:'+d.color+'"></span>'+escapeHtml(getName(d, index))+'<span class="donut-legend-val">'+d.value+'</div>'
+    }).join('');
   }
 }
 
 export function createInteractionDonut(range) {
   var data = Array.isArray(INTERACTION_BREAKDOWN[range]) ? INTERACTION_BREAKDOWN[range] : [];
   var total = data.reduce((a, d) => a + d.value, 0);
+  var getName = function(item, index) {
+    return String(item && (item.name || item.label || item.key) || ('项目' + String(index + 1)));
+  };
   var totalEl = document.getElementById('interactionTotal');
   if (totalEl) totalEl.textContent = total;
   var canvas = document.getElementById('interactionDonut') as HTMLCanvasElement | null;
@@ -1310,7 +1316,7 @@ export function createInteractionDonut(range) {
   interactionDonutInstance = new Chart(canvas, {
     type: 'doughnut',
     data: {
-      labels: data.map(d => d.name),
+      labels: data.map((d, index) => getName(d, index)),
       datasets: [{ data: data.map(d => d.value), backgroundColor: data.map(d => d.color), borderWidth: 2, borderColor: '#fff', hoverOffset: 6 }]
     },
     options: {
@@ -1340,9 +1346,9 @@ export function createInteractionDonut(range) {
   });
   var legend = document.getElementById('interactionLegend');
   if (legend) {
-    legend.innerHTML = data.map(d =>
-      '<div class="donut-legend-item"><span class="donut-legend-dot" style="background:'+d.color+'"></span>'+d.name+'<span class="donut-legend-val">'+d.value+'</div>'
-    ).join('');
+    legend.innerHTML = data.map(function(d, index) {
+      return '<div class="donut-legend-item"><span class="donut-legend-dot" style="background:'+d.color+'"></span>'+escapeHtml(getName(d, index))+'<span class="donut-legend-val">'+d.value+'</div>'
+    }).join('');
   }
 }
 

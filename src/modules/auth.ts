@@ -22,6 +22,9 @@ interface AuthEnvelope {
   devCode?: string;
   error?: string;
   detail?: string;
+  message?: string;
+  success?: boolean;
+  data?: any;
 }
 
 function withRequestTimeout(timeoutMs: number) {
@@ -55,9 +58,9 @@ function clearStoredAuthState() {
   }
 }
 
-function persistAuthSession(token: string, user: AuthUser) {
+function persistAuthSession(user: AuthUser) {
   try {
-    localStorage.setItem(AUTH_TOKEN_KEY, token)
+    localStorage.setItem(AUTH_TOKEN_KEY, 'cookie-session')
     localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(user))
   } catch {}
 }
@@ -72,7 +75,9 @@ async function parseResponseEnvelope(res: Response): Promise<AuthEnvelope> {
 
 function normalizeErrorMessage(payload: AuthEnvelope, fallback: string) {
   if (payload.error) return payload.error
+  if (payload.message) return payload.message
   if (typeof payload.detail === 'string' && payload.detail) return payload.detail
+  if (payload.data && typeof payload.data.message === 'string' && payload.data.message) return payload.data.message
   return fallback
 }
 
@@ -84,9 +89,10 @@ async function postAuth<T extends AuthEnvelope>(
   try {
     var response = await fetch(API_BASE + path, {
       method: 'POST',
-      headers: Object.assign({ 'Content-Type': 'application/json' }, getAuthHeaders()),
+      headers: { 'Content-Type': 'application/json' },
       body: body ? JSON.stringify(body) : undefined,
       signal: timeout.signal,
+      credentials: 'include',
     })
     var payload = await parseResponseEnvelope(response) as T
     if (!response.ok) {
@@ -123,14 +129,74 @@ export function getCurrentUser(): AuthUser | null {
 }
 
 export function getAuthHeaders(): Record<string, string> {
-  var headers: Record<string, string> = {}
-  var token = getAuthToken()
-  if (token) headers.Authorization = 'Bearer ' + token
-  return headers
+  return {}
+}
+
+async function fetchTenantName(): Promise<string> {
+  var timeout = withRequestTimeout(AUTH_REQUEST_TIMEOUT_MS)
+  try {
+    var response = await fetch(API_BASE + '/tenant', {
+      signal: timeout.signal,
+      credentials: 'include',
+    })
+    var payload = await parseResponseEnvelope(response)
+    if (!response.ok) return ''
+    var data = payload && payload.data ? payload.data : payload
+    if (data && typeof data.tenantName === 'string') return data.tenantName
+    return ''
+  } catch {
+    return ''
+  } finally {
+    timeout.clear()
+  }
+}
+
+async function refreshCurrentUser(): Promise<AuthUser | null> {
+  var timeout = withRequestTimeout(AUTH_REQUEST_TIMEOUT_MS)
+  try {
+    var response = await fetch(API_BASE + '/auth/get-session', {
+      signal: timeout.signal,
+      credentials: 'include',
+    })
+    var payload = await parseResponseEnvelope(response)
+    if (!response.ok) {
+      clearStoredAuthState()
+      return null
+    }
+
+    var data = payload && payload.data ? payload.data : payload
+    var session = data && data.session ? data.session : data
+    var rawUser = session && session.user ? session.user : (data && data.user ? data.user : null)
+    if (!rawUser) {
+      clearStoredAuthState()
+      return null
+    }
+
+    var tenantName = await fetchTenantName()
+    var user: AuthUser = {
+      id: Number(rawUser.id) || 0,
+      name: String(rawUser.name || ''),
+      phoneNumber: String(rawUser.phoneNumber || ''),
+      role: String(rawUser.role || ''),
+      tenant_id: Number(rawUser.tenant_id || 0),
+      tenant_name: tenantName || String(rawUser.tenant_name || ''),
+    }
+    if (!user.id || !user.role) {
+      clearStoredAuthState()
+      return null
+    }
+    persistAuthSession(user)
+    return user
+  } catch {
+    clearStoredAuthState()
+    return null
+  } finally {
+    timeout.clear()
+  }
 }
 
 export async function sendOtp(phone: string): Promise<{ ok: boolean; devCode?: string; error?: string }> {
-  var result = await postAuth<AuthEnvelope>('/auth/send-otp', { phone: phone })
+  var result = await postAuth<AuthEnvelope>('/auth/phone-number/send-otp', { phoneNumber: phone })
   if (!result.ok) return { ok: false, error: result.error || '验证码发送失败' }
   return {
     ok: true,
@@ -139,21 +205,28 @@ export async function sendOtp(phone: string): Promise<{ ok: boolean; devCode?: s
 }
 
 export async function login(phone: string, code: string): Promise<{ ok: boolean; token?: string; user?: AuthUser; error?: string }> {
-  var result = await postAuth<AuthEnvelope>('/auth/login', { phone: phone, code: code })
-  if (!result.ok || !result.data || !result.data.token || !result.data.user) {
+  var result = await postAuth<AuthEnvelope>('/auth/phone-number/verify', {
+    phoneNumber: phone,
+    code: code,
+    disableSession: false,
+  })
+  if (!result.ok) {
     return { ok: false, error: result.error || '登录失败' }
   }
-  persistAuthSession(result.data.token, result.data.user)
+  var user = await refreshCurrentUser()
+  if (!user) {
+    return { ok: false, error: '登录成功，但无法读取会话信息' }
+  }
   return {
     ok: true,
-    token: result.data.token,
-    user: result.data.user,
+    token: getAuthToken(),
+    user: user,
   }
 }
 
 export async function logout() {
   try {
-    await postAuth<AuthEnvelope>('/auth/logout')
+    await postAuth<AuthEnvelope>('/auth/sign-out')
   } finally {
     clearStoredAuthState()
     window.location.reload()
@@ -161,33 +234,5 @@ export async function logout() {
 }
 
 export async function verifyToken(): Promise<boolean> {
-  var token = getAuthToken()
-  if (!token) {
-    clearStoredAuthState()
-    return false
-  }
-
-  var timeout = withRequestTimeout(AUTH_REQUEST_TIMEOUT_MS)
-  try {
-    var response = await fetch(API_BASE + '/auth/me', {
-      headers: getAuthHeaders(),
-      signal: timeout.signal,
-    })
-    if (!response.ok) {
-      clearStoredAuthState()
-      return false
-    }
-    var payload = await parseResponseEnvelope(response)
-    if (!payload.user) {
-      clearStoredAuthState()
-      return false
-    }
-    persistAuthSession(token, payload.user)
-    return true
-  } catch {
-    clearStoredAuthState()
-    return false
-  } finally {
-    timeout.clear()
-  }
+  return !!(await refreshCurrentUser())
 }

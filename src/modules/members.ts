@@ -1,6 +1,6 @@
 import { membersData } from '../data/members'
 import { openModal, closeModal, showToast } from './modal-toast'
-import { apiAddMember, apiUpdateMember, apiDeleteMember, apiDistributeCredits } from '../data/api'
+import { apiAddMember, apiUpdateMember, apiDeleteMember, apiDistributeCredits, apiAdjustMemberCredits } from '../data/api'
 import { refreshDashboard } from '../main'
 import { escapeHtml } from './utils'
 import { isMemberReadOnly } from './read-only'
@@ -190,7 +190,6 @@ export function openManageMemberModal(id) {
   if (!m) return;
   var body = '<div class="modal-field"><label class="modal-label">姓名</label><input class="modal-input" id="mgName" value="'+escapeHtml(m.name)+'"></div>' +
     '<div class="modal-field"><label class="modal-label">手机号</label><input class="modal-input" id="mgPhone" value="'+escapeHtml(m.phone)+'"></div>' +
-    '<div class="modal-field"><label class="modal-label">角色</label><select class="modal-select" id="mgRole"><option value="member" '+(m.role==='member'?'selected':'')+'>成员</option><option value="admin" '+(m.role==='admin'?'selected':'')+'>管理员</option></select></div>' +
     '<div style="border-top:1px solid #e4e4e7;margin:16px 0;"></div>' +
     '<div style="font-size:13px;font-weight:600;color:#52525b;margin-bottom:12px;">算力豆管理</div>' +
     '<div class="modal-field"><label class="modal-label">当前余额</label><div style="font-size:14px;font-weight:600;color:#2563eb;padding:8px 0;">'+m.balance.toLocaleString()+' 算力豆</div></div>' +
@@ -208,25 +207,24 @@ export async function saveManageMember(id) {
   if (!m) return;
   var name = (document.getElementById('mgName') as HTMLInputElement).value.trim();
   var phone = (document.getElementById('mgPhone') as HTMLInputElement).value.trim();
-  var role = (document.getElementById('mgRole') as HTMLSelectElement).value;
   var adjust = parseInt((document.getElementById('mgAdjust') as HTMLInputElement).value) || 0;
   var note = ((document.getElementById('mgNote') as HTMLInputElement) || {}).value || '';
   note = note.trim();
 
   var btn = startLoading();
-  var updateRes = await apiUpdateMember(id, { name: name, phone_number: phone, role: role });
-  if (!updateRes.ok) { stopLoading(btn, '保存'); showToast(updateRes.error || '更新失败', 'error'); return; }
+  var profileChanged = name !== m.name || phone !== m.phone;
+  if (profileChanged) {
+    var updateRes = await apiUpdateMember(id, {
+      name: name,
+      phone_number: phone,
+      role: m.role,
+    });
+    if (!updateRes.ok) { stopLoading(btn, '保存'); showToast(updateRes.error || '成员资料更新失败', 'error'); return; }
+  }
 
   if (adjust !== 0) {
-    var admin = membersData.find(function(x) { return x.role === 'admin'; });
-    if (!admin) { stopLoading(btn, '保存'); showToast('找不到管理员账号', 'error'); return; }
-    var distRes;
-    if (adjust > 0) {
-      distRes = await apiDistributeCredits(admin.id, id, adjust, note || '管理员分发');
-    } else {
-      distRes = await apiDistributeCredits(id, admin.id, Math.abs(adjust), note || '管理员扣减');
-    }
-    if (!distRes.ok) { stopLoading(btn, '保存'); showToast(distRes.error || '调整余额失败', 'error'); return; }
+    var adjustRes = await apiAdjustMemberCredits(id, adjust, note || (adjust > 0 ? '管理员分发' : '管理员扣减'));
+    if (!adjustRes.ok) { stopLoading(btn, '保存'); showToast(adjustRes.error || '调整余额失败', 'error'); return; }
   }
 
   closeModal();
