@@ -173,11 +173,12 @@ function normalizeTransactionFilterType(value) {
 }
 
 function normalizeOplogFilterAction(value) {
-  if (value === '新增成员') return 'ADD_MEMBER'
-  if (value === '删除成员') return 'REMOVE_MEMBER'
+  if (value === '新增成员') return 'MEMBER_CREATE'
+  if (value === '删除成员') return 'MEMBER_DELETE'
   if (value === '编辑成员') return 'MEMBER_UPDATE'
-  if (value === '封禁成员') return 'BAN_MEMBER'
-  if (value === '分发积分' || value === '分发算力豆') return 'TRANSFER_CREDITS'
+  if (value === '封禁成员') return 'MEMBER_BAN'
+  if (value === '分发积分' || value === '分发算力豆') return 'CREDIT_DISTRIBUTE'
+  if (value === '扣减积分' || value === '扣减算力豆') return 'CREDIT_DEDUCT'
   return ''
 }
 

@@ -1,8 +1,19 @@
-import { getAuthHeaders } from '../modules/auth'
+import { getAuthHeaders, getCurrentUser } from '../modules/auth'
 
 var API_BASE = ((import.meta as any).env && (import.meta as any).env.VITE_API_BASE) || '/api';
 var API_REQUEST_TIMEOUT_MS = 8000;
 var API_PROBE_TIMEOUT_MS = 3000;
+
+interface ApiEnvelope<T> {
+  success?: boolean;
+  data?: T;
+  error?: {
+    code?: string;
+    message?: string;
+  } | string;
+  message?: string;
+  detail?: string | unknown;
+}
 
 function buildApiHeaders(extraHeaders?: Record<string, string>): Record<string, string> {
   var headers: Record<string, string> = Object.assign(
@@ -48,6 +59,30 @@ async function parseJSONResponse<T>(res: Response): Promise<T | null> {
   }
 }
 
+function unwrapEnvelope<T>(payload: ApiEnvelope<T> | T | null): T | null {
+  if (!payload) return null
+  if (typeof payload === 'object' && 'data' in (payload as ApiEnvelope<T>)) {
+    var envelope = payload as ApiEnvelope<T>
+    if (envelope.success === false) return null
+    if (envelope.data !== undefined) return envelope.data as T
+  }
+  return payload as T
+}
+
+function readEnvelopeError<T>(payload: ApiEnvelope<T> | T | null, fallback: string): string {
+  if (!payload) return fallback
+  if (typeof payload === 'object' && 'error' in (payload as ApiEnvelope<T>)) {
+    var envelope = payload as ApiEnvelope<T>
+    if (typeof envelope.error === 'string' && envelope.error) return envelope.error
+    if (envelope.error && typeof envelope.error === 'object' && typeof envelope.error.message === 'string') {
+      return envelope.error.message
+    }
+    if (typeof envelope.message === 'string' && envelope.message) return envelope.message
+    if (typeof envelope.detail === 'string' && envelope.detail) return envelope.detail
+  }
+  return fallback
+}
+
 function newIdempotencyKey(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return crypto.randomUUID()
@@ -65,9 +100,10 @@ export async function fetchJSON<T>(path: string): Promise<T | null> {
     var res = await fetch(API_BASE + path, {
       headers: buildApiHeaders(),
       signal: timeout.signal,
+      credentials: 'include',
     });
     if (!res.ok) return null;
-    return await parseJSONResponse<T>(res);
+    return unwrapEnvelope<T>(await parseJSONResponse<ApiEnvelope<T> | T>(res));
   } catch {
     return null;
   } finally {
@@ -123,9 +159,10 @@ export function isApiAvailable(): Promise<boolean> {
   _apiPromise = (async function() {
     var timeout = withRequestTimeout(API_PROBE_TIMEOUT_MS)
     try {
-      var res = await fetch(API_BASE + '/stats/overview?days=1', {
+      var res = await fetch(API_BASE + '/health', {
         headers: buildApiHeaders(),
         signal: timeout.signal,
+        credentials: 'include',
       });
       return res.ok;
     } catch {
@@ -197,15 +234,79 @@ export interface AccountData {
 }
 
 export async function fetchMembers() {
-  return fetchJSON<MemberData[]>('/members');
+  var data = await fetchJSON<{
+    members: Array<{
+      id: number;
+      name: string;
+      phoneNumber: string | null;
+      role: string;
+      remaining: number;
+      createdAt: string;
+    }>;
+  }>('/members');
+  if (!data || !Array.isArray(data.members)) return null
+  return data.members.map(function(member) {
+    return {
+      id: member.id,
+      username: member.name,
+      phone: member.phoneNumber || '',
+      role: member.role,
+      balance: Number(member.remaining) || 0,
+      join_date: member.createdAt,
+      exec_count: 0,
+      total_tokens: 0,
+    }
+  })
 }
 
 export async function fetchWallet() {
-  return fetchJSON<WalletData>('/wallet');
+  var data = await fetchJSON<{
+    remaining: number;
+    totalPurchased: number;
+    totalUsed: number;
+    enterpriseRemaining?: number;
+    enterpriseTotalPurchased?: number;
+    enterpriseTotalUsed?: number;
+  }>('/wallet');
+  if (!data) return null
+  return {
+    total_balance: Number(data.enterpriseRemaining != null ? data.enterpriseRemaining : data.remaining) || 0,
+    total_recharged: Number(data.enterpriseTotalPurchased != null ? data.enterpriseTotalPurchased : data.totalPurchased) || 0,
+    total_consumed: Number(data.enterpriseTotalUsed != null ? data.enterpriseTotalUsed : data.totalUsed) || 0,
+    admin_remaining: Number(data.remaining) || 0,
+    member_count: 0,
+  }
 }
 
 export async function fetchTransactions(page: number = 1, pageSize: number = 20) {
-  return fetchJSON<TransactionsData>(`/transactions?page=${page}&page_size=${pageSize}`);
+  var data = await fetchJSON<{
+    items: Array<{
+      changeType: string;
+      userName: string;
+      changeAmount: number;
+      balanceAfter: number;
+      createdAt: string;
+      remark?: string | null;
+    }>;
+    total: number;
+  }>(`/transactions?page=${page}&pageSize=${pageSize}`);
+  if (!data) return null
+  return {
+    items: (data.items || []).map(function(item) {
+      return {
+        change_type: item.changeType,
+        task_exec_id: null,
+        task_name: item.remark || null,
+        username: item.userName,
+        call_count: 0,
+        total_change: item.changeAmount,
+        balance_after: item.balanceAfter,
+        started_at: item.createdAt,
+        ended_at: item.createdAt,
+      }
+    }),
+    total: Number(data.total) || 0,
+  }
 }
 
 export async function fetchSkills() {
@@ -213,7 +314,27 @@ export async function fetchSkills() {
 }
 
 export async function fetchAccounts() {
-  return fetchJSON<AccountData[]>('/accounts');
+  var data = await fetchJSON<{
+    accountSummaries: Array<{
+      userId: number;
+      userName: string;
+      totalCount: number;
+      successCount: number;
+      runtimeHours: number;
+      credits: number;
+    }>;
+  }>('/dashboard?range=7d');
+  if (!data || !Array.isArray(data.accountSummaries)) return null
+  return data.accountSummaries.map(function(account) {
+    return {
+      id: account.userId,
+      username: account.userName,
+      exec_count: Number(account.totalCount) || 0,
+      success_count: Number(account.successCount) || 0,
+      runtime_h: Number(account.runtimeHours) || 0,
+      total_credits: Number(account.credits) || 0,
+    }
+  })
 }
 
 export async function mutateJSON<T>(method: string, path: string, body?: any): Promise<{ok: boolean; status: number; data: T | null; error?: string}> {
@@ -223,16 +344,16 @@ export async function mutateJSON<T>(method: string, path: string, body?: any): P
       method: method,
       headers: buildApiHeaders({ 'Idempotency-Key': newIdempotencyKey() }),
       signal: timeout.signal,
+      credentials: 'include',
     };
     if (body !== undefined) opts.body = JSON.stringify(body);
     var res = await fetch(API_BASE + path, opts);
-    var data = await parseJSONResponse<T & { error?: string; detail?: string | unknown }>(res);
+    var data = await parseJSONResponse<ApiEnvelope<T> | T>(res);
     if (!res.ok) {
-      var errMsg = (data && data.error)
-        || (data && data.detail ? (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)) : '操作失败');
+      var errMsg = readEnvelopeError(data, '操作失败');
       return { ok: false, status: res.status, data: null, error: errMsg };
     }
-    return { ok: true, status: res.status, data: data as T | null };
+    return { ok: true, status: res.status, data: unwrapEnvelope<T>(data) };
   } catch {
     return { ok: false, status: 0, data: null, error: timeout.didTimeout() ? '请求超时' : '网络错误' };
   } finally {
@@ -240,18 +361,103 @@ export async function mutateJSON<T>(method: string, path: string, body?: any): P
   }
 }
 
-export function apiAddMember(name: string, phone_number: string, initial_balance: number) {
-  return mutateJSON<{id: number; success: boolean}>('POST', '/members', { name, phone_number, initial_balance });
+export async function apiAddMember(name: string, phone_number: string, initial_balance: number) {
+  var created = await mutateJSON<{
+    id: number;
+    name: string;
+    phoneNumber: string | null;
+  }>('POST', '/members', { name: name, phoneNumber: phone_number });
+  if (!created.ok || !created.data) return created
+  if (initial_balance > 0) {
+    var distribute = await apiDistributeCredits(0, created.data.id, initial_balance, '新增成员初始积分')
+    if (!distribute.ok) return { ok: false, status: distribute.status, data: null, error: distribute.error || '初始积分发放失败' }
+  }
+  return created
 }
 
-export function apiUpdateMember(user_id: number, updates: {name?: string; phone_number?: string; role?: string}) {
-  return mutateJSON<{success: boolean}>('PUT', '/members/' + user_id, updates);
+export async function apiUpdateMember(user_id: number, updates: {name?: string; phone_number?: string; role?: string}) {
+  return mutateJSON<{
+    id: number;
+    name: string;
+    phoneNumber: string | null;
+    role: string;
+    remaining: number;
+  }>('PATCH', '/members/' + user_id, {
+    name: String(updates.name || '').trim(),
+    phoneNumber: String(updates.phone_number || '').trim(),
+  })
 }
 
 export function apiDeleteMember(user_id: number) {
   return mutateJSON<{success: boolean}>('DELETE', '/members/' + user_id);
 }
 
-export function apiDistributeCredits(operator_id: number, target_user_id: number, amount: number, remark: string) {
-  return mutateJSON<{success: boolean}>('POST', '/credits/distribute', { operator_id, target_user_id, amount, remark });
+export async function apiDistributeCredits(operator_id: number, target_user_id: number, amount: number, remark: string) {
+  var currentUser = getCurrentUser()
+  if (!currentUser || currentUser.id <= 0) {
+    return {
+      ok: false,
+      status: 401,
+      data: null,
+      error: '登录状态已失效，请重新登录',
+    }
+  }
+  if (operator_id && operator_id !== currentUser.id) {
+    return {
+      ok: false,
+      status: 400,
+      data: null,
+      error: 'coremate 当前仅支持管理员向成员分发积分，不支持在此页面扣减成员余额',
+    }
+  }
+  if (target_user_id === currentUser.id) {
+    return {
+      ok: false,
+      status: 400,
+      data: null,
+      error: 'coremate 当前仅支持管理员向成员分发积分，不支持向管理员账户回退积分',
+    }
+  }
+  return mutateJSON<{success: boolean}>('POST', '/wallet/distribute', {
+    targetUserId: target_user_id,
+    credits: amount,
+    remark: remark,
+  });
+}
+
+export async function apiAdjustMemberCredits(target_user_id: number, delta: number, remark: string) {
+  var currentUser = getCurrentUser()
+  if (!currentUser || currentUser.id <= 0) {
+    return {
+      ok: false,
+      status: 401,
+      data: null,
+      error: '登录状态已失效，请重新登录',
+    }
+  }
+  if (!Number.isInteger(delta) || delta === 0) {
+    return {
+      ok: false,
+      status: 400,
+      data: null,
+      error: '调整数量必须为非 0 整数',
+    }
+  }
+  if (target_user_id === currentUser.id) {
+    return {
+      ok: false,
+      status: 400,
+      data: null,
+      error: '不能直接调整管理员自身余额',
+    }
+  }
+  return mutateJSON<{
+    adminRemainingAfter: number;
+    memberRemainingAfter: number;
+    delta: number;
+  }>('POST', '/wallet/adjust', {
+    targetUserId: target_user_id,
+    delta: delta,
+    remark: remark,
+  })
 }

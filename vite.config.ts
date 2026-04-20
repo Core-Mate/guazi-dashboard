@@ -1,5 +1,7 @@
 import { defineConfig } from 'vite'
 
+var saasAdminOrigin = process.env.VITE_COREMATE_SAAS_ADMIN_ORIGIN || 'http://127.0.0.1:12306'
+
 export default defineConfig({
   root: '.',
   base: './',
@@ -10,7 +12,7 @@ export default defineConfig({
   server: {
     port: 8402,
     proxy: {
-      '/api': { target: 'http://localhost:8403', changeOrigin: true },
+      '/api': { target: saasAdminOrigin, changeOrigin: true },
     },
   },
 })
