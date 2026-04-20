@@ -119,7 +119,7 @@ async def enforce_dashboard_rbac(
         return
 
     role = str(user.get("role") or "").strip().lower()
-    if role in {"admin"}:
+    if role in {"admin", "enterprise_admin"}:
         return
     if role == "member":
         _raise_auth_error(request, 403, "只读成员无权修改")

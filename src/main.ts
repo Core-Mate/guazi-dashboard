@@ -24,6 +24,7 @@ import { bindRidgelineToggle, refreshRidgeline } from './modules/ridgeline-bind'
 import { pTag, initFilters, renderTaskTable, animateAllNumbers, getToday, getStatNum, setStatNum, prependTransaction, formatCompareText } from './modules/utils'
 import { applyMembersData, applyWalletData, fetchDashboardData, applyBetaOverlays, clearDashboardSnapshotCache, normalizeTransactions, normalizeAuditLog, showDashboardError } from './modules/api-integration'
 import { getAuthToken, getCurrentUser, login as loginWithOtp, logout as logoutFromDashboard, sendOtp, verifyToken, type AuthUser } from './modules/auth'
+import { syncMemberReadOnlyUI } from './modules/read-only'
 import { PLATFORM_BREAKDOWN } from './data/platforms'
 import { INTERACTION_BREAKDOWN } from './data/charts'
 
@@ -61,6 +62,7 @@ function setLoginError(message: string) {
 function formatUserRole(user: AuthUser | null) {
   if (!user) return ''
   if (user.role === 'admin') return '管理员'
+  if (user.role === 'enterprise_admin') return '平台管理员'
   if (user.role === 'member') return '只读成员'
   return user.role || ''
 }
@@ -84,6 +86,7 @@ function showLoginOverlay(errorMessage?: string) {
   setElementHidden('dashboardShell', true)
   setElementHidden('loginOverlay', false)
   updateSidebarUser(null)
+  syncMemberReadOnlyUI(null)
   setLoginError(errorMessage || '')
   window.setTimeout(function() {
     var phoneInput = document.getElementById('loginPhoneInput') as HTMLInputElement | null
@@ -94,7 +97,9 @@ function showLoginOverlay(errorMessage?: string) {
 function showDashboardShell() {
   setElementHidden('loginOverlay', true)
   setElementHidden('dashboardShell', false)
-  updateSidebarUser(getCurrentUser())
+  var user = getCurrentUser()
+  updateSidebarUser(user)
+  syncMemberReadOnlyUI(user)
 }
 
 function renderOtpCooldown() {

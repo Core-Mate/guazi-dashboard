@@ -3,6 +3,7 @@ import { openModal, closeModal, showToast } from './modal-toast'
 import { apiAddMember, apiUpdateMember, apiDeleteMember, apiDistributeCredits } from '../data/api'
 import { refreshDashboard } from '../main'
 import { escapeHtml } from './utils'
+import { isMemberReadOnly } from './read-only'
 
 function startLoading(label?: string) {
   var btn = document.querySelector('#modalFooter .modal-btn:not(.modal-btn-cancel)') as HTMLButtonElement;
@@ -18,6 +19,17 @@ var memberSearchQuery = '';
 
 export var memberSortKey: 'name' | 'phone' | 'role' | 'balance' | 'joinedAt' = 'joinedAt';
 export var memberSortDir: 'asc' | 'desc' = 'desc';
+
+function getMemberColspan() {
+  return isMemberReadOnly() ? 5 : 7;
+}
+
+function blockReadonlyMemberAction() {
+  if (!isMemberReadOnly()) return false;
+  selectedMemberIds.clear();
+  showToast('当前为只读成员模式，请联系管理员操作', 'error');
+  return true;
+}
 
 function getMemberRoleLabel(role) {
   return role === 'admin' ? '管理员' : '成员';
@@ -88,10 +100,12 @@ function getPrimaryAdminId() {
 
 export function renderMembers(filter?) {
   if (typeof filter === 'string') memberSearchQuery = filter.trim();
+  var readonlyMode = isMemberReadOnly();
   var filtered = membersData;
   var primaryAdminId = getPrimaryAdminId();
   var countEl = document.getElementById('statMemberCount');
   if (countEl) countEl.textContent = membersData.length + '人';
+  if (readonlyMode) selectedMemberIds.clear();
   if (memberSearchQuery) {
     var q = memberSearchQuery.toLowerCase();
     filtered = membersData.filter(function(m) {
@@ -105,7 +119,7 @@ export function renderMembers(filter?) {
   }
   filtered = sortMemberRows(filtered);
   if (!filtered.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="padding:24px 12px;text-align:center;color:#94a3b8;">'
+    tbody.innerHTML = '<tr><td colspan="' + getMemberColspan() + '" style="padding:24px 12px;text-align:center;color:#94a3b8;">'
       + (memberSearchQuery ? '未找到匹配的成员' : '暂无成员数据') + '</td></tr>';
     syncMemberSortHeaders();
     updateBatchBar();
@@ -114,11 +128,23 @@ export function renderMembers(filter?) {
   tbody.innerHTML = filtered.map(function(m) {
     var isPrimaryAdmin = m.id === primaryAdminId;
     var roleBadge = m.role === 'admin' ? '<span class="badge-role-admin">管理员</span>' : '<span class="badge-role-member">成员</span>';
-    var selectCell = isPrimaryAdmin ? '<td></td>' : '<td><input type="checkbox" class="member-checkbox" data-id="'+m.id+'"'+(selectedMemberIds.has(m.id) ? ' checked' : '')+' onchange="toggleMemberSelect('+m.id+',this.checked)"></td>';
-    var actions = isPrimaryAdmin ? '—' :
-      '<button class="btn-sm" onclick="openManageMemberModal('+m.id+')">管理</button>' +
-      '<button class="btn-sm-danger" onclick="confirmRemoveMember('+m.id+')">移除</button>';
-    return '<tr>'+selectCell+'<td class="td-bold">'+escapeHtml(m.name)+'</td><td class="td-mono">'+escapeHtml(m.phone)+'</td><td>'+roleBadge+'</td><td class="td-mono">'+m.balance.toLocaleString()+'</td><td class="text-muted">'+escapeHtml(m.joinDate)+'</td><td>'+actions+'</td></tr>';
+    var cells = [];
+    if (!readonlyMode) {
+      var selectCell = isPrimaryAdmin ? '<td></td>' : '<td><input type="checkbox" class="member-checkbox" data-id="'+m.id+'"'+(selectedMemberIds.has(m.id) ? ' checked' : '')+' onchange="toggleMemberSelect('+m.id+',this.checked)"></td>';
+      cells.push(selectCell);
+    }
+    cells.push('<td class="td-bold">'+escapeHtml(m.name)+'</td>');
+    cells.push('<td class="td-mono">'+escapeHtml(m.phone)+'</td>');
+    cells.push('<td>'+roleBadge+'</td>');
+    cells.push('<td class="td-mono">'+m.balance.toLocaleString()+'</td>');
+    cells.push('<td class="text-muted">'+escapeHtml(m.joinDate)+'</td>');
+    if (!readonlyMode) {
+      var actions = isPrimaryAdmin ? '—' :
+        '<button class="btn-sm" onclick="openManageMemberModal('+m.id+')">管理</button>' +
+        '<button class="btn-sm-danger" onclick="confirmRemoveMember('+m.id+')">移除</button>';
+      cells.push('<td>'+actions+'</td>');
+    }
+    return '<tr>'+cells.join('')+'</tr>';
   }).join('');
   var allRows = tbody.querySelectorAll('tr') as any;
   allRows.forEach(function(row, i) {
@@ -130,9 +156,11 @@ export function renderMembers(filter?) {
     setTimeout(function() { row.style.opacity = '1'; row.style.transform = 'translateY(0)'; }, 10);
   });
   syncMemberSortHeaders();
+  updateBatchBar();
 }
 
 export function openAddMemberModal() {
+  if (blockReadonlyMemberAction()) return;
   var body = '<div class="modal-field"><label class="modal-label">姓名</label><input class="modal-input" id="newMemberName" placeholder="请输入成员姓名"></div>' +
     '<div class="modal-field"><label class="modal-label">手机号</label><input class="modal-input" id="newMemberPhone" placeholder="请输入手机号"></div>' +
     '<div class="modal-field"><label class="modal-label">初始算力豆</label><input class="modal-input" type="number" id="newMemberBalance" value="0" min="0"></div>';
@@ -142,6 +170,7 @@ export function openAddMemberModal() {
 }
 
 export async function addMember() {
+  if (blockReadonlyMemberAction()) return;
   var name = (document.getElementById('newMemberName') as HTMLInputElement).value.trim();
   var phone = (document.getElementById('newMemberPhone') as HTMLInputElement).value.trim();
   var balance = parseInt((document.getElementById('newMemberBalance') as HTMLInputElement).value) || 0;
@@ -156,6 +185,7 @@ export async function addMember() {
 }
 
 export function openManageMemberModal(id) {
+  if (blockReadonlyMemberAction()) return;
   var m = membersData.find(function(x) { return x.id === id; });
   if (!m) return;
   var body = '<div class="modal-field"><label class="modal-label">姓名</label><input class="modal-input" id="mgName" value="'+escapeHtml(m.name)+'"></div>' +
@@ -172,6 +202,7 @@ export function openManageMemberModal(id) {
 }
 
 export async function saveManageMember(id) {
+  if (blockReadonlyMemberAction()) return;
   if (id === getPrimaryAdminId()) return;
   var m = membersData.find(function(x) { return x.id === id; });
   if (!m) return;
@@ -204,6 +235,7 @@ export async function saveManageMember(id) {
 }
 
 export function confirmRemoveMember(id) {
+  if (blockReadonlyMemberAction()) return;
   var m = membersData.find(function(x) { return x.id === id; });
   if (!m) return;
   if (id === getPrimaryAdminId()) { showToast('管理员不可移除', 'error'); return; }
@@ -214,6 +246,7 @@ export function confirmRemoveMember(id) {
 }
 
 export async function removeMember(id) {
+  if (blockReadonlyMemberAction()) return;
   var m = membersData.find(function(x) { return x.id === id; });
   if (m && id === getPrimaryAdminId()) { showToast('管理员不可移除', 'error'); closeModal(); return; }
   var btn = startLoading();
@@ -228,6 +261,11 @@ function updateBatchBar() {
   var bar = document.getElementById('memberBatchBar');
   var countEl = document.getElementById('memberBatchCount');
   if (!bar) return;
+  if (isMemberReadOnly()) {
+    selectedMemberIds.clear();
+    bar.style.display = 'none';
+    return;
+  }
   if (selectedMemberIds.size > 0) {
     bar.style.display = 'flex';
     if (countEl) countEl.textContent = '已选 ' + selectedMemberIds.size + ' 人';
@@ -242,12 +280,14 @@ function updateBatchBar() {
 }
 
 export function toggleMemberSelect(id, checked) {
+  if (isMemberReadOnly()) return;
   if (checked) selectedMemberIds.add(id);
   else selectedMemberIds.delete(id);
   updateBatchBar();
 }
 
 export function toggleSelectAllMembers(checked) {
+  if (isMemberReadOnly()) return;
   var primaryAdminId = getPrimaryAdminId();
   var selectedIds = checked ? membersData.filter(function(m) { return m.id !== primaryAdminId; }).map(function(m) { return m.id; }) : [];
   selectedMemberIds = new Set(selectedIds);
@@ -268,6 +308,7 @@ export function cancelBatchSelect() {
 }
 
 export function openBatchDistributeModal() {
+  if (blockReadonlyMemberAction()) return;
   if (selectedMemberIds.size === 0) return;
   var names = [];
   membersData.filter(function(m) { return m.id !== getPrimaryAdminId(); }).forEach(function(m) {
@@ -285,6 +326,7 @@ export function openBatchDistributeModal() {
 }
 
 export function confirmBatchRemove() {
+  if (blockReadonlyMemberAction()) return;
   if (selectedMemberIds.size === 0) return;
   var names = [];
   membersData.forEach(function(m) {
@@ -299,6 +341,7 @@ export function confirmBatchRemove() {
 }
 
 export async function executeBatchRemove() {
+  if (blockReadonlyMemberAction()) return;
   var targetIds = Array.from(selectedMemberIds).filter(function(id) {
     var m = membersData.find(function(x) { return x.id === id; });
     return m && id !== getPrimaryAdminId();
@@ -321,6 +364,7 @@ export async function executeBatchRemove() {
 }
 
 export async function confirmBatchDistribute() {
+  if (blockReadonlyMemberAction()) return;
   var amountEl = document.getElementById('batchDistAmount') as HTMLInputElement;
   var remarkEl = document.getElementById('batchDistRemark') as HTMLInputElement;
   var amount = parseInt(amountEl?.value || '0');

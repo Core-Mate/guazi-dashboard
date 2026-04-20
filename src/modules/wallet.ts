@@ -3,6 +3,7 @@ import { membersData } from '../data/members'
 import { apiDistributeCredits } from '../data/api'
 import { renderOverviewOplogTable } from './records'
 import { refreshDashboard } from '../main'
+import { isMemberReadOnly } from './read-only'
 
 function startLoading(label?: string) {
   var btn = document.querySelector('#modalFooter .modal-btn:not(.modal-btn-cancel)') as HTMLButtonElement;
@@ -13,11 +14,18 @@ function stopLoading(btn: HTMLButtonElement, label: string) {
   if (btn) { btn.disabled = false; btn.classList.remove('btn-loading'); btn.textContent = label; }
 }
 
+function blockReadonlyWalletAction() {
+  if (!isMemberReadOnly()) return false;
+  showToast('当前为只读成员模式，请联系管理员操作', 'error');
+  return true;
+}
+
 export function renderOverviewOplog() {
   return renderOverviewOplogTable(10);
 }
 
 export function openDistributeToMember(id) {
+  if (blockReadonlyWalletAction()) return;
   var m = membersData.find(function(x) { return x.id === id; });
   if (!m) return;
   var body = '<div class="modal-field"><label class="modal-label">成员</label><div style="font-size:14px;font-weight:500;padding:8px 0;">'+m.name+'</div></div>' +
@@ -29,6 +37,7 @@ export function openDistributeToMember(id) {
 }
 
 export function openDistributeModal() {
+  if (blockReadonlyWalletAction()) return;
   var nonAdmin = membersData.filter(function(m) { return m.role !== 'admin'; });
   var opts = nonAdmin.map(function(m) { return '<option value="'+m.id+'">'+m.name+'</option>'; }).join('');
   var body = '<div class="modal-field"><label class="modal-label">选择成员</label><select class="modal-select" id="dMemberId">'+opts+'</select></div>' +
@@ -39,6 +48,7 @@ export function openDistributeModal() {
 }
 
 export async function confirmDistribute() {
+  if (blockReadonlyWalletAction()) return;
   var memberIdEl = document.getElementById('dMemberId') as HTMLInputElement | HTMLSelectElement;
   if (!memberIdEl) return;
   var memberId = parseInt(memberIdEl.value);
