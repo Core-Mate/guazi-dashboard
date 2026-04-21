@@ -115,6 +115,7 @@ except ImportError:  # pragma: no cover
 CN_TZ = timezone(timedelta(hours=8))
 logger = logging.getLogger(__name__)
 QUERY_TIMEOUT_SECONDS = 30.0
+COST_PER_CREDIT = 0.08  # 客户视角 credit 单价（销售价）；依据：企业套餐充值扣赠送后 ≈ 10 金币/元 → ¥0.077-0.082/金币，取 0.08
 _snapshot_cache = TTLCache(maxsize=200, ttl=90)
 _snapshot_cache_registry = PerKeyLock()
 _highlights_cache = TTLCache(maxsize=200, ttl=90)
@@ -1333,7 +1334,7 @@ async def _actual_aggregate_charts(
     saves = int(cur_totals.get("saves", 0))
     dms = int(cur_totals.get("dms", 0))
     value_total = round(comments * 1.3 + dms * 1.3 + likes * 0.4 + saves * 0.4)
-    cost_total = round(cur_credits * 0.3)
+    cost_total = round(cur_credits * COST_PER_CREDIT)
     roi_val = round(value_total / cost_total, 1) if cost_total else 0
     saved = max(value_total - cost_total, 0)
     saved_pct = round(saved / value_total * 100) if value_total else 0

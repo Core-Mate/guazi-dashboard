@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>我们怎么计算 ROI · 对齐用</title>
+<style>
+  :root {
+    --bg: #fafaf7;
+    --card: #ffffff;
+    --ink: #1a1a1a;
+    --ink-2: #555;
+    --ink-3: #888;
+    --line: #e5e4df;
+    --accent: #0f766e;
+    --accent-ink: #134e4a;
+    --accent-soft: #f0fdfa;
+    --accent-line: #99f6e4;
+    --warm: #fef3c7;
+    --warm-line: #facc15;
+    --warm-ink: #713f12;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    font-size: 16px;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+  .container {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 64px 32px 96px;
+  }
+  header {
+    margin-bottom: 48px;
+  }
+  .eyebrow {
+    font-size: 12px;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-weight: 600;
+    margin-bottom: 10px;
+  }
+  h1 {
+    font-size: 36px;
+    font-weight: 700;
+    margin: 0 0 10px;
+    letter-spacing: -0.015em;
+    line-height: 1.25;
+  }
+  .subtitle {
+    font-size: 15px;
+    color: var(--ink-3);
+  }
+  h2 {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 56px 0 16px;
+    letter-spacing: -0.005em;
+    color: var(--ink);
+  }
+  h2 .step {
+    display: inline-block;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: white;
+    font-size: 13px;
+    line-height: 26px;
+    text-align: center;
+    margin-right: 10px;
+    vertical-align: 2px;
+  }
+  p {
+    margin: 0 0 12px;
+    color: var(--ink);
+  }
+  .lead {
+    font-size: 17px;
+    color: var(--ink-2);
+    line-height: 1.75;
+  }
+
+  /* 核心公式卡 */
+  .formula-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 32px 36px;
+    margin: 20px 0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+  }
+  .formula-main {
+    text-align: center;
+    padding: 16px 0;
+    border-bottom: 1px dashed var(--line);
+    margin-bottom: 20px;
+  }
+  .formula-main .eq {
+    font-size: 28px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--ink);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .formula-main .tag-roi {
+    background: var(--accent);
+    color: white;
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+  .formula-main .tag-value,
+  .formula-main .tag-cost {
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 20px;
+  }
+  .formula-main .tag-value { background: #dcfce7; color: #166534; }
+  .formula-main .tag-cost { background: #fee2e2; color: #991b1b; }
+  .formula-main .op { color: var(--ink-3); font-weight: 400; }
+
+  .formula-breakdown {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+  .breakdown-item .label {
+    font-size: 13px;
+    color: var(--ink-3);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 6px;
+    font-weight: 600;
+  }
+  .breakdown-item .formula-line {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--ink);
+    background: #f8f7f2;
+    padding: 12px 14px;
+    border-radius: 6px;
+    border-left: 3px solid var(--accent);
+  }
+  .breakdown-item.cost .formula-line { border-left-color: #f87171; }
+
+  /* 示例计算 */
+  .example {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 28px 32px;
+    margin: 20px 0;
+  }
+  .example-title {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--ink-3);
+    margin-bottom: 14px;
+    font-weight: 600;
+  }
+  .example-data {
+    background: #f8f7f2;
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    font-size: 14px;
+    color: var(--ink-2);
+    line-height: 2;
+  }
+  .example-data strong { color: var(--ink); font-weight: 600; }
+  .example-steps {
+    display: grid;
+    gap: 12px;
+  }
+  .step-row {
+    display: grid;
+    grid-template-columns: 110px 1fr 90px;
+    gap: 16px;
+    align-items: center;
+    padding: 12px 16px;
+    background: #fafaf7;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+  }
+  .step-row .step-label {
+    font-size: 13px;
+    color: var(--ink-3);
+    font-weight: 600;
+  }
+  .step-row .step-calc {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 13.5px;
+    color: var(--ink);
+  }
+  .step-row .step-result {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--accent-ink);
+    text-align: right;
+  }
+  .step-row.final {
+    background: var(--accent-soft);
+    border-color: var(--accent-line);
+    border-width: 1.5px;
+  }
+  .step-row.final .step-label { color: var(--accent); }
+  .step-row.final .step-result {
+    font-size: 18px;
+    color: var(--accent);
+  }
+
+  /* 数据来源表 */
+  .source-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 14.5px;
+    background: var(--card);
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid var(--line);
+  }
+  .source-table th, .source-table td {
+    text-align: left;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  .source-table th {
+    background: #f8f7f2;
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--ink-2);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .source-table tr:last-child td { border-bottom: none; }
+  .tag-real {
+    background: #dcfce7;
+    color: #166534;
+    padding: 3px 10px;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .tag-estimate {
+    background: #fef3c7;
+    color: #854d0e;
+    padding: 3px 10px;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  /* 假设前提卡 */
+  .assumptions {
+    background: var(--warm);
+    border: 1px solid var(--warm-line);
+    border-radius: 12px;
+    padding: 24px 28px;
+    margin: 20px 0;
+  }
+  .assumptions h3 {
+    margin: 0 0 12px;
+    font-size: 15px;
+    color: var(--warm-ink);
+    font-weight: 700;
+  }
+  .assumptions ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .assumptions li {
+    padding: 8px 0;
+    font-size: 14.5px;
+    color: var(--warm-ink);
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 16px;
+    align-items: center;
+    border-bottom: 1px dashed rgba(133, 77, 14, 0.2);
+  }
+  .assumptions li:last-child { border-bottom: none; }
+  .assumptions li .val {
+    font-family: "SF Mono", Menlo, monospace;
+    font-weight: 700;
+    font-size: 15px;
+    background: rgba(255,255,255,0.6);
+    padding: 3px 10px;
+    border-radius: 6px;
+  }
+
+  /* Credit 成本对照 */
+  .credit-compare {
+    margin-top: 20px;
+    background: rgba(255,255,255,0.7);
+    border: 1px solid rgba(133, 77, 14, 0.25);
+    border-radius: 10px;
+    padding: 18px 22px;
+  }
+  .credit-compare .cc-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--warm-ink);
+    margin-bottom: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .credit-compare table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+  .credit-compare th {
+    text-align: left;
+    padding: 8px 10px;
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--warm-ink);
+    border-bottom: 1px solid rgba(133, 77, 14, 0.2);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .credit-compare td {
+    padding: 10px;
+    border-bottom: 1px dashed rgba(133, 77, 14, 0.15);
+    color: var(--ink);
+    vertical-align: middle;
+  }
+  .credit-compare tr:last-child td { border-bottom: none; }
+  .credit-compare .cc-calc {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 13px;
+    color: var(--ink-2);
+  }
+  .credit-compare .cc-val {
+    font-family: "SF Mono", Menlo, monospace;
+    font-weight: 700;
+    font-size: 15px;
+    text-align: right;
+  }
+  .credit-compare .cc-val.ok { color: #166534; }
+  .credit-compare .cc-val.warn { color: #b91c1c; }
+  .credit-gap {
+    margin-top: 14px;
+    padding: 12px 16px;
+    background: #fef2f2;
+    border: 1px solid #fca5a5;
+    border-radius: 8px;
+    color: #991b1b;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .credit-gap .gap-num {
+    font-size: 22px;
+    font-weight: 800;
+    color: #b91c1c;
+    font-family: "SF Mono", Menlo, monospace;
+  }
+
+  /* 要对齐的议题 */
+  .align-list {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 8px 28px;
+    margin: 16px 0;
+  }
+  .align-list ol {
+    padding-left: 20px;
+    margin: 16px 0;
+  }
+  .align-list li {
+    margin: 14px 0;
+    font-size: 15px;
+    line-height: 1.7;
+  }
+  .align-list li strong {
+    color: var(--ink);
+  }
+  .align-list li span {
+    display: block;
+    color: var(--ink-3);
+    font-size: 13.5px;
+    margin-top: 2px;
+  }
+
+  footer {
+    margin-top: 64px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--ink-3);
+    text-align: center;
+  }
+
+  @media print {
+    body { background: white; }
+    .container { padding: 24px; }
+    h2 { page-break-after: avoid; }
+    .formula-card, .example, .assumptions, .align-list { break-inside: avoid; }
+  }
+
+  @media (max-width: 640px) {
+    .formula-breakdown { grid-template-columns: 1fr; }
+    .step-row { grid-template-columns: 1fr; gap: 4px; }
+    .step-row .step-result { text-align: left; }
+    h1 { font-size: 28px; }
+    .formula-main .eq { font-size: 22px; }
+  }
+</style>
+</head>
+<body>
+<main class="container">
+
+<header>
+  <div class="eyebrow">guazi-dashboard · ROI 对齐</div>
+  <h1>我们现在是怎么计算 ROI 的</h1>
+  <div class="subtitle">一页讲清楚:公式、示例、假设前提</div>
+</header>
+
+<p class="lead">Dashboard 上展示的 ROI,本质是把<strong>互动数据</strong>换算成"估算价值",除以把 <strong>credits 消耗</strong>换算成"估算成本"。两个数字都是估算,核心算法在后端一个函数里完成。</p>
+
+<h2><span class="step">1</span>核心公式</h2>
+
+<div class="formula-card">
+  <div class="formula-main">
+    <div class="eq">
+      <span class="tag-roi">ROI</span>
+      <span class="op">=</span>
+      <span class="tag-value">产生的价值</span>
+      <span class="op">÷</span>
+      <span class="tag-cost">投入的成本</span>
+    </div>
+  </div>
+  <div class="formula-breakdown">
+    <div class="breakdown-item value">
+      <div class="label">产生的价值(元)</div>
+      <div class="formula-line">
+        评论 × 1.3<br>
+        + 私信 × 1.3<br>
+        + 点赞 × 0.4<br>
+        + 收藏 × 0.4
+      </div>
+    </div>
+    <div class="breakdown-item cost">
+      <div class="label">投入的成本(元)</div>
+      <div class="formula-line">
+        消耗的 credits<br>
+        × 0.08
+      </div>
+    </div>
+  </div>
+</div>
+
+<h2><span class="step">2</span>拿一个真实任务代入</h2>
+
+<p class="lead">以下是 dev 环境里的一个真实任务 <strong>task #154「瓜子任务」</strong>,跑完后数据库里的实际数字:</p>
+
+<div class="example">
+  <div class="example-title">输入 · 从数据库取</div>
+  <div class="example-data">
+    评论 <strong>20</strong> 条 &nbsp;·&nbsp; 私信 <strong>0</strong> 次 &nbsp;·&nbsp; 点赞 <strong>20</strong> 个 &nbsp;·&nbsp; 收藏 <strong>20</strong> 个<br>
+    消耗 credits <strong>340</strong>
+  </div>
+
+  <div class="example-title">计算 · 代入公式</div>
+  <div class="example-steps">
+    <div class="step-row">
+      <div class="step-label">评论价值</div>
+      <div class="step-calc">20 × 1.3</div>
+      <div class="step-result">26 元</div>
+    </div>
+    <div class="step-row">
+      <div class="step-label">私信价值</div>
+      <div class="step-calc">0 × 1.3</div>
+      <div class="step-result">0 元</div>
+    </div>
+    <div class="step-row">
+      <div class="step-label">点赞价值</div>
+      <div class="step-calc">20 × 0.4</div>
+      <div class="step-result">8 元</div>
+    </div>
+    <div class="step-row">
+      <div class="step-label">收藏价值</div>
+      <div class="step-calc">20 × 0.4</div>
+      <div class="step-result">8 元</div>
+    </div>
+    <div class="step-row">
+      <div class="step-label">产生价值合计</div>
+      <div class="step-calc">26 + 0 + 8 + 8</div>
+      <div class="step-result">42 元</div>
+    </div>
+    <div class="step-row">
+      <div class="step-label">投入成本</div>
+      <div class="step-calc">340 × 0.08</div>
+      <div class="step-result">27 元</div>
+    </div>
+    <div class="step-row final">
+      <div class="step-label">ROI</div>
+      <div class="step-calc">42 ÷ 27</div>
+      <div class="step-result">1.6x</div>
+    </div>
+    <div class="step-row">
+      <div class="step-label">净省 (saved)</div>
+      <div class="step-calc">42 − 27</div>
+      <div class="step-result">15 元</div>
+    </div>
+    <div class="step-row">
+      <div class="step-label">净省比例</div>
+      <div class="step-calc">15 ÷ 42</div>
+      <div class="step-result">36%</div>
+    </div>
+  </div>
+</div>
+
+<p class="note" style="font-size:13px;color:var(--ink-3);margin-top:12px">
+  数据来源: <code class="code-inline" style="background:#f3f2ed;padding:1px 6px;border-radius:4px;font-family:'SF Mono',Menlo,monospace;font-size:12.5px;">user_task #154</code> · dev 环境 PostgreSQL · 2026-04 快照
+</p>
+
+<h2><span class="step">3</span>每个数字从哪儿来</h2>
+
+<table class="source-table">
+  <tr>
+    <th>项</th>
+    <th>来源</th>
+    <th>性质</th>
+  </tr>
+  <tr>
+    <td>评论 / 私信 / 点赞 / 收藏</td>
+    <td>数据库 · execution_behavior_stat 表</td>
+    <td><span class="tag-real">真实</span></td>
+  </tr>
+  <tr>
+    <td>消耗 credits</td>
+    <td>数据库 · credit_flow 表(CONSUME 类型)</td>
+    <td><span class="tag-real">真实</span></td>
+  </tr>
+  <tr>
+    <td>1.3 / 0.4 单价</td>
+    <td>后端 Python 代码硬编码</td>
+    <td><span class="tag-estimate">估算</span></td>
+  </tr>
+  <tr>
+    <td>0.3 换算系数</td>
+    <td>后端 Python 代码硬编码</td>
+    <td><span class="tag-estimate">估算</span></td>
+  </tr>
+</table>
+
+<h2><span class="step">4</span>背后的估算假设</h2>
+
+<p>这里面写死了几个数字,都没有正式的定价依据,目前是开发同学"合理估"出来的。当前<strong>全平台共用同一套单价</strong>(小红书 / 抖音 / 微信 / ... 不做区分),后续待客户数据积累后可以按平台、按行业细分。</p>
+
+<div class="assumptions">
+  <ul>
+    <li>
+      <span>每 1 条评论、1 次私信 ≈ 人工价值</span>
+      <span class="val">1.3 元</span>
+    </li>
+    <li>
+      <span>每 1 个点赞、1 次收藏 ≈ 人工价值</span>
+      <span class="val">0.4 元</span>
+    </li>
+    <li>
+      <span>1 credit ≈ 客户实际付费(销售价)<br><span style="font-size:12.5px;color:rgba(113,63,18,0.75)">企业套餐充值扣赠送后 ≈ 10 金币/元</span></span>
+      <span class="val">0.08 元</span>
+    </li>
+  </ul>
+  <p style="margin: 14px 0 0; font-size: 13px; color: rgba(113,63,18,0.85); line-height: 1.6">
+    <strong>注</strong>: ROI 是给<strong>客户</strong>看的,所以分母用"客户实际付的钱"(0.08,已含赠送 & margin),不是内部 token 底层成本(0.05)。
+  </p>
+</div>
+
+<h2><span class="step">5</span>需要和您对齐的几件事</h2>
+
+<div class="align-list">
+  <ol>
+    <li>
+      <strong>互动单价(1.3 / 0.4)怎么定?要不要按平台区分?</strong>
+      <span>目前全平台统一。理论上小红书 / 抖音 / 微信的评论、点赞价值天然不同,后期有客户数据后可以细分。确定之后放配置表,按租户 / 行业 / 平台调整不用改代码。</span>
+    </li>
+    <li>
+      <strong>credit 销售价要不要按套餐区分?</strong>
+      <span>当前统一 0.08 元/credit。实际企业起订版 / 标准版 ≈ 0.077,个人通用版 ≈ 0.082。如果要更精准,可以按租户订阅的套餐取对应系数(这样 ROI 对不同客户显示的数值会更准)。</span>
+    </li>
+    <li>
+      <strong>这里的"ROI"对外怎么叫?</strong>
+      <span>严格讲这不是财务 ROI(分子不是真实收入,是估算价值),建议加个副标题如"估算价值倍数",避免客户误以为是成单金额。</span>
+    </li>
+    <li>
+      <strong>要不要加"每个任务的 ROI"?</strong>
+      <span>现在只有租户整体 ROI,没有单个任务的 ROI。销售场景里客户常问"哪个任务最值",加上会更容易讲故事。</span>
+    </li>
+  </ol>
+</div>
+
+<footer>
+  基于 guazi-dashboard / api/queries.py · 2026-04
+</footer>
+
+</main>
+</body>
+</html>
